@@ -76,7 +76,7 @@ A lista completa está em [docs/design.md](docs/design.md), em inglês.
 
 ## Desenvolvimento
 
-Com o [LuaJIT](https://luajit.org) instalado, a partir da raiz do repositório:
+Com o [LuaJIT](https://luajit.org) e o [LuaFileSystem](https://lunarmodules.github.io/luafilesystem/) instalados, a partir da raiz do repositório:
 
 ```sh
 for spec in tests/*_spec.lua; do luajit "$spec"; done

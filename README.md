@@ -86,7 +86,7 @@ The full list is in [docs/design.md](docs/design.md).
 
 ## Development
 
-With [LuaJIT](https://luajit.org) installed, from the repository root:
+With [LuaJIT](https://luajit.org) and [LuaFileSystem](https://lunarmodules.github.io/luafilesystem/) installed, from the repository root:
 
 ```sh
 for spec in tests/*_spec.lua; do luajit "$spec"; done

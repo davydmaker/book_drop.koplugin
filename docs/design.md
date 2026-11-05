@@ -85,6 +85,7 @@ book_drop.koplugin/
 
 - `luajit tests/access_spec.lua`: tests for the rules, including attack attempts and crafted EPUB metadata.
 - `luajit tests/server_spec.lua`: tests for the server with fake connections: places per address, uploads, downloads and errors.
+- `luajit tests/storage_spec.lua`: tests for the books folder on real temporary folders, with LuaFileSystem: what is listed, links, reading data, hidden items, depth, names taken and leftovers.
 - With `KOREADER_DIR` pointing to a desktop KOReader:
   - `tools/koreader/check_server.sh` starts the real server and tests it with `curl`: approval, integrity of downloads and uploads, covers, the zip, cut and simultaneous uploads, and attack attempts.
   - `tools/koreader/run_emulator.sh` opens a window with the plugin.
