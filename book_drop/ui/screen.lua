@@ -280,6 +280,7 @@ function Screen:start_sharing()
         list_books = function() return self:list_books() end,
         stat_file = regular_file_size,
         can_store = function(name, size) return self.storage:can_store(name, size) end,
+        is_busy = function() return self.server ~= nil and self.server.uploading == true end,
         build_zip = function() return self:build_zip() end,
         on_new_client = function(client_ip) self:ask_permission(client_ip) end,
     }

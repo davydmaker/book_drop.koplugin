@@ -232,5 +232,51 @@ test("two downloads at once both move in the same tick", function()
     os.remove(path)
 end)
 
+local function upload(name, body, size)
+    return request("/upload", "POST", string.format("X-File-Name: %s\r\nContent-Length: %d\r\n", name, size or #body)) .. body
+end
+
+test("an upload arrives whole and gets its name", function()
+    local opts = {}
+    local server, access = new_server(opts)
+    approve(server, access)
+    local content = random_bytes(300 * 1024)
+    local client = connect(server, fake_client(PHONE, upload("livro.epub", content)))
+    ticks(server, 10)
+    eq(server.storage.committed["livro.epub"] == content, true)
+    eq(client:response():find("HTTP/1.1 201 Created", 1, true), 1)
+    eq(server.uploading, nil)
+end)
+
+test("a second upload while one is under way is refused", function()
+    local opts = {}
+    local server, access = new_server(opts)
+    approve(server, access)
+    local first = connect(server, fake_client(PHONE, upload("um.epub", "abc", 10)))
+    ticks(server, 3)
+    eq(server.uploading, true)
+    local second = connect(server, fake_client(PHONE, upload("dois.epub", "abc")))
+    ticks(server, 3)
+    eq(second:response():find("HTTP/1.1 409 Conflict", 1, true), 1)
+    eq(second:response():find(I18n.en.upload_busy, 1, true) ~= nil, true)
+    first.eof = true
+    ticks(server, 2)
+    eq(server.uploading, nil)
+end)
+
+test("a cut upload leaves nothing behind", function()
+    local opts = {}
+    local server, access = new_server(opts)
+    approve(server, access)
+    local client = connect(server, fake_client(PHONE, upload("livro.epub", "metade", 100)))
+    ticks(server, 3)
+    client.eof = true
+    ticks(server, 3)
+    eq(server.storage.committed["livro.epub"], nil)
+    eq(server.storage.discarded, 1)
+    eq(server.uploading, nil)
+    eq(#server.connections, 0)
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

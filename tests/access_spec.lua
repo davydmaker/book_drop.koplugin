@@ -259,6 +259,15 @@ test("an upload neither replaces a file nor exceeds the free space", function()
     eq(post(a, "existe.epub", "10").status, 409)
     eq(post(a, "um.epub", "999").status, 507)
 end)
+test("another upload under way is reported before sending and when sending", function()
+    local a = approved()
+    a.is_busy = function() return true end
+    eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").status, 409)
+    eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").body, I18n.pt.upload_busy)
+    eq(post(a, "um.epub", "10").status, 409)
+    a.is_busy = function() return false end
+    eq(post(a, "um.epub", "10").upload.name, "um.epub")
+end)
 test("the check before an upload follows the same rules", function()
     local a = approved()
     eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").status, 200)
@@ -293,6 +302,7 @@ test("pages and script follow the language", function()
         eq(r.body:find('lang="' .. I18n[language].html_lang .. '"', 1, true) ~= nil, true)
         local script = get(a, "/" .. TOKEN .. "/upload.js").body
         eq(script:find("%CHECKING%", 1, true), nil)
+        eq(script:find("upload.onerror = explain", 1, true) ~= nil, true)
     end
 end)
 test("grid and list of books", function()

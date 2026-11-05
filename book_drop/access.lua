@@ -120,7 +120,7 @@ end
 -- and list_books() returning { { name, path, size } }, build_zip() returning { path, size } or nil and "space",
 -- can_store(name, size) returning nil or a key of UPLOAD_ERRORS, read_cover(path) returning the image and
 -- its type, or nil, stat_file(path) returning the size of a regular file (nil for a link or anything else),
--- on_new_client(ip).
+-- is_busy() telling whether an upload is under way, on_new_client(ip).
 function Access.new(opts)
     return setmetatable({
         token = opts.token,
@@ -132,6 +132,7 @@ function Access.new(opts)
         stat_file = opts.stat_file,
         build_zip = opts.build_zip,
         can_store = opts.can_store,
+        is_busy = opts.is_busy,
         on_new_client = opts.on_new_client,
         client_ip = nil,
         pending_ip = nil,
@@ -367,8 +368,17 @@ local UPLOAD_SCRIPT = [[
       row.textContent = file.name + ": " + message;
       send(files, index + 1);
     }
+    var checkUrl = base + "can-upload?name=" + encodeURIComponent(file.name) + "&size=" + file.size;
+    // A refusal that comes while the file is still going up can arrive as a cut connection: asking again tells why.
+    function explain() {
+      var again = new XMLHttpRequest();
+      again.open("GET", checkUrl);
+      again.onerror = function () { finish(TEXT.lost); };
+      again.onload = function () { finish(again.status === 200 ? TEXT.lost : again.responseText); };
+      again.send();
+    }
     var check = new XMLHttpRequest();
-    check.open("GET", base + "can-upload?name=" + encodeURIComponent(file.name) + "&size=" + file.size);
+    check.open("GET", checkUrl);
     check.onerror = function () { finish(TEXT.lost); };
     check.onload = function () {
       if (check.status !== 200) { finish(check.responseText); return; }
@@ -380,7 +390,7 @@ local UPLOAD_SCRIPT = [[
           row.textContent = file.name + ": " + Math.floor(event.loaded * 100 / event.total) + "%";
         }
       };
-      upload.onerror = function () { finish(TEXT.lost); };
+      upload.onerror = explain;
       upload.onload = function () {
         finish(upload.status === 201 ? TEXT.done : upload.responseText);
       };
@@ -424,6 +434,9 @@ function Access:check_upload(raw_name, size_text)
     end
     if not Access.is_book(name) then
         return text_response(415, s.upload_bad_format)
+    end
+    if self.is_busy and self.is_busy() then
+        return self:upload_error("busy")
     end
     local problem = self.can_store(name, size)
     if problem then
