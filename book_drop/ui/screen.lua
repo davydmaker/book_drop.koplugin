@@ -32,6 +32,8 @@ local TICK_ACTIVE = 0.02
 local TICK_IDLE = 0.25
 local IDLE_LIMIT = 600
 local BOOKS_CACHE_SECONDS = 5
+-- Updates without a flash before a full refresh clears what e-ink leaves behind.
+local PARTIAL_REFRESHES = 8
 local TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 local TOKEN_LENGTH = 16
 local SERIF = "noto/NotoSerif-Regular.ttf"
@@ -393,7 +395,9 @@ function Screen:button(text, callback)
     }
 end
 
-function Screen:set_group(group)
+-- kind names the layout: a new one gets a full refresh, while a change of text in the same one, such as the
+-- name of the book arriving, does not flash the whole screen.
+function Screen:set_group(kind, group)
     if self[1] then
         self[1]:free()
     end
@@ -407,15 +411,23 @@ function Screen:set_group(group)
         height = self.height,
         CenterContainer:new{ dimen = Geom:new{ w = self.width, h = self.height }, group },
     }
+    local mode = "full"
+    if kind == self.shown_kind and (self.partial_refreshes or 0) < PARTIAL_REFRESHES then
+        mode = "ui"
+        self.partial_refreshes = (self.partial_refreshes or 0) + 1
+    else
+        self.partial_refreshes = 0
+    end
+    self.shown_kind = kind
     UIManager:setDirty(self, function()
-        return "full", self.dimen
+        return mode, self.dimen
     end)
 end
 
 function Screen:show_message(title, message)
     local gap = Device_screen:scaleBySize(16)
     self.state = "message"
-    self:set_group(VerticalGroup:new{
+    self:set_group("message", VerticalGroup:new{
         align = "center",
         self:paragraph(title, SERIF_BOLD, 28),
         VerticalSpan:new{ width = gap },
@@ -446,7 +458,7 @@ function Screen:show_waiting()
     local s = self.strings
     local gap = Device_screen:scaleBySize(12)
     local qr_size = math.floor(math.min(self.width, self.height) * 0.62)
-    self:set_group(VerticalGroup:new{
+    self:set_group("waiting", VerticalGroup:new{
         align = "center",
         self:paragraph(s.title, SERIF_BOLD, 28),
         VerticalSpan:new{ width = gap },
@@ -469,7 +481,7 @@ end
 function Screen:show_connected()
     local s = self.strings
     local gap = Device_screen:scaleBySize(16)
-    self:set_group(VerticalGroup:new{
+    self:set_group("connected", VerticalGroup:new{
         align = "center",
         self:paragraph(s.title, SERIF, 20),
         VerticalSpan:new{ width = gap * 2 },
