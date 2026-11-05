@@ -232,6 +232,34 @@ test("two downloads at once both move in the same tick", function()
     os.remove(path)
 end)
 
+test("the length of a download comes from the file, not from an old listing", function()
+    local content = random_bytes(4096)
+    local path = temp_file(content)
+    local opts = { shots = { { name = "shot.png", path = path, size = 10 } } }
+    local server, access = new_server(opts)
+    approve(server, access)
+    connect(server, fake_client(PHONE, request("/shots")))
+    ticks(server, 5)
+    local client = connect(server, fake_client(PHONE, request("/shot/1")))
+    ticks(server, 5)
+    local head, body = split(client:response())
+    eq(tonumber(head:match("Content%-Length: (%d+)")), #content)
+    eq(body == content, true)
+    os.remove(path)
+end)
+
+test("a file that cannot be opened is an error, not a broken download", function()
+    local opts = { shots = { { name = "shot.png", path = "/nowhere/shot.png", size = 10 } } }
+    local server, access = new_server(opts)
+    approve(server, access)
+    connect(server, fake_client(PHONE, request("/shots")))
+    ticks(server, 5)
+    local client = connect(server, fake_client(PHONE, request("/shot/1")))
+    ticks(server, 5)
+    eq(client:response():find("HTTP/1.1 500", 1, true), 1)
+    eq(client:response():match("Content%-Length: (%d+)"), "0")
+end)
+
 local function upload(name, body, size)
     return request("/upload", "POST", string.format("X-File-Name: %s\r\nContent-Length: %d\r\n", name, size or #body)) .. body
 end

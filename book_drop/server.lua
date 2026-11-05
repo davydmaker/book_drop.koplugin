@@ -74,12 +74,18 @@ end
 function Server:reply(conn, result)
     conn.body = nil
     if result.path then
+        -- The length comes from the open file, not from a listing that may be a few seconds old, and no more
+        -- than that is sent, so the head always tells the truth about the body.
         local file = io.open(result.path, "rb")
-        if not file then
+        local size = file and file:seek("end")
+        if not size or not file:seek("set", 0) then
+            if file then
+                file:close()
+            end
             result = { status = 500, body = "", content_type = "text/plain" }
         else
-            conn.file = file
-            conn.outgoing = Access.response_head(result, result.size)
+            conn.file, conn.file_left = file, size
+            conn.outgoing = Access.response_head(result, size)
         end
     end
     if not conn.file then
@@ -205,8 +211,9 @@ function Server:send_response(conn)
         local chunk
         if conn.body then
             chunk, conn.body = conn.body, nil
-        else
-            chunk = conn.file and conn.file:read(CHUNK)
+        elseif conn.file and conn.file_left > 0 then
+            chunk = conn.file:read(math.min(CHUNK, conn.file_left))
+            conn.file_left = conn.file_left - (chunk and #chunk or 0)
         end
         if not chunk then
             conn.done = true
