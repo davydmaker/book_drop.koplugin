@@ -152,5 +152,28 @@ test("a blocked address is dropped as soon as it connects", function()
     eq(from(server, "192.168.0.99"), 0)
 end)
 
+local function request(path, method, extra)
+    return string.format("%s /%s%s HTTP/1.1\r\nHost: %s\r\n%s\r\n", method or "GET", TOKEN, path, HOST, extra or "")
+end
+
+local function split(response)
+    local head_end = response:find("\r\n\r\n", 1, true)
+    return response:sub(1, head_end + 3), response:sub(head_end + 4)
+end
+
+test("a page is sent whole, with the length it announces", function()
+    local server, access = new_server()
+    approve(server, access)
+    local client = connect(server, fake_client(PHONE, request("/")))
+    client.send_limit = 100
+    ticks(server, 200)
+    local head, body = split(client:response())
+    eq(head:find("HTTP/1.1 200 OK", 1, true), 1)
+    eq(tonumber(head:match("Content%-Length: (%d+)")), #body)
+    eq(body:find("<!doctype html>", 1, true), 1)
+    eq(body:sub(-7), "</html>")
+    eq(client.closed, true)
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

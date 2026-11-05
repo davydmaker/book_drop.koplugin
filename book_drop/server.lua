@@ -68,6 +68,7 @@ function Server:touch(conn)
 end
 
 function Server:reply(conn, result)
+    conn.body = nil
     if result.path then
         local file = io.open(result.path, "rb")
         if not file then
@@ -78,7 +79,9 @@ function Server:reply(conn, result)
         end
     end
     if not conn.file then
-        conn.outgoing = Access.response_head(result, #result.body) .. result.body
+        conn.outgoing = Access.response_head(result, #result.body)
+        -- Sent after the head instead of joined to it, which would copy a cover of megabytes once more.
+        conn.body = result.body
     end
     conn.sent = 0
     conn.state = "sending"
@@ -194,7 +197,12 @@ end
 
 function Server:send_response(conn)
     if conn.sent >= #conn.outgoing then
-        local chunk = conn.file and conn.file:read(CHUNK)
+        local chunk
+        if conn.body then
+            chunk, conn.body = conn.body, nil
+        else
+            chunk = conn.file and conn.file:read(CHUNK)
+        end
         if not chunk then
             conn.done = true
             return

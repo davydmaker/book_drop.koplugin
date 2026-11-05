@@ -131,6 +131,7 @@ function Screen:init()
     self.zip_path = self.zip_dir .. "/book_drop.zip"
     self.storage = Storage.new{ dir = self.books_dir, skip_dir = DataStorage:getDataDir() }
     self.received = 0
+    self.no_cover = {}
     self.strings = I18n[self.language or I18n.language_from(G_reader_settings:readSetting("language"))]
     self.tick_callback = function() self:tick() end
     self:start_sharing()
@@ -165,6 +166,20 @@ function Screen:list_books()
         self.book_count = #self.books_cache
     end
     return self.books_cache
+end
+
+-- A book without a usable cover is remembered, by path and date, so scrolling back does not open it again.
+-- Images are not kept: they would cost more memory than reading them again.
+function Screen:read_cover(path)
+    local key = string.format("%s/%s", path, tostring(lfs.attributes(path, "modification")))
+    if self.no_cover[key] then
+        return nil
+    end
+    local data, content_type = Cover.read(path)
+    if not data then
+        self.no_cover[key] = true
+    end
+    return data, content_type
 end
 
 -- symlinkattributes, so a listed file replaced by a link stops being served.
@@ -260,7 +275,7 @@ function Screen:start_sharing()
         token = token,
         host = string.format("%s:%d", ip, PORT),
         strings = self.strings,
-        read_cover = Cover.read,
+        read_cover = function(path) return self:read_cover(path) end,
         list_shots = function() return self:list_shots() end,
         list_books = function() return self:list_books() end,
         stat_file = regular_file_size,
