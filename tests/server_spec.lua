@@ -75,9 +75,13 @@ local function new_server(opts)
     local access = Access.new{
         token = TOKEN, host = HOST, strings = I18n.en,
         read_cover = function() end,
-        list_shots = function() return {} end,
+        list_shots = function() return opts.shots or {} end,
         list_books = function() return {} end,
-        stat_file = function() end,
+        stat_file = function(path)
+            for _, file in ipairs(opts.shots or {}) do
+                if file.path == path then return file.size end
+            end
+        end,
         can_store = function() end,
         build_zip = function() end,
         on_new_client = function() end,
@@ -173,6 +177,59 @@ test("a page is sent whole, with the length it announces", function()
     eq(body:find("<!doctype html>", 1, true), 1)
     eq(body:sub(-7), "</html>")
     eq(client.closed, true)
+end)
+
+local function temp_file(content)
+    local path = os.tmpname()
+    local file = io.open(path, "wb")
+    file:write(content)
+    file:close()
+    return path
+end
+
+local function random_bytes(size)
+    local parts = {}
+    for index = 1, size / 256 do
+        local block = {}
+        for byte = 1, 256 do block[byte] = string.char((index * 31 + byte * 7) % 256) end
+        parts[index] = table.concat(block)
+    end
+    return table.concat(parts)
+end
+
+test("a large download goes out in few ticks, and intact", function()
+    local content = random_bytes(1024 * 1024)
+    local path = temp_file(content)
+    local opts = { shots = { { name = "big.png", path = path, size = #content } } }
+    local server, access = new_server(opts)
+    approve(server, access)
+    connect(server, fake_client(PHONE, request("/shots")))
+    ticks(server, 5)
+    local client = connect(server, fake_client(PHONE, request("/shot/1")))
+    ticks(server, 3)
+    eq(client.closed, true)
+    local head, body = split(client:response())
+    eq(head:find("HTTP/1.1 200 OK", 1, true), 1)
+    eq(#body, #content)
+    eq(body == content, true)
+    os.remove(path)
+end)
+
+test("two downloads at once both move in the same tick", function()
+    local content = random_bytes(512 * 1024)
+    local path = temp_file(content)
+    local opts = { shots = { { name = "big.png", path = path, size = #content } } }
+    local server, access = new_server(opts)
+    approve(server, access)
+    connect(server, fake_client(PHONE, request("/shots")))
+    ticks(server, 5)
+    local first = connect(server, fake_client(PHONE, request("/shot/1")))
+    local second = connect(server, fake_client(PHONE, request("/shot/1")))
+    first.send_limit, second.send_limit = 4096, 4096
+    server:tick()
+    eq(#first:response() > 0, true)
+    eq(#second:response() > 0, true)
+    os.remove(path)
 end)
 
 print(string.format("%d passed, %d failed", passed, failed))

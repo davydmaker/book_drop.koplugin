@@ -5,7 +5,11 @@ local Access = require("book_drop/access")
 local Server = {}
 Server.__index = Server
 
-local CHUNK = 16384
+local CHUNK = 65536
+-- How long one tick may work on transfers before giving the interface its turn again.
+local TICK_BUDGET = 0.03
+local MAX_ACCEPTS = 4
+local MAX_PASSES = 256
 local MAX_CONNECTIONS = 12
 local MAX_CLIENT_CONNECTIONS = 6
 local MAX_OTHER_CONNECTIONS = 2
@@ -181,6 +185,7 @@ function Server:read_request(conn)
     elseif err == "closed" then
         conn.done = true
     end
+    return received ~= nil and #received > 0
 end
 
 function Server:read_body(conn)
@@ -205,10 +210,14 @@ function Server:send_response(conn)
         end
         if not chunk then
             conn.done = true
-            return
+            return false
         end
         conn.outgoing, conn.sent = chunk, 0
+        if chunk == "" then
+            return true
+        end
     end
+    local before = conn.sent
     local last, err, partial = conn.client:send(conn.outgoing, conn.sent + 1)
     local position = last or partial or conn.sent
     -- Only real progress extends the deadline, so a stalled client cannot hold the connection.
@@ -219,6 +228,7 @@ function Server:send_response(conn)
     if err == "closed" then
         conn.done = true
     end
+    return conn.sent > before
 end
 
 -- The device the person is using has its own places, so other addresses on the network can never take them,
@@ -240,27 +250,26 @@ function Server:has_room(ip)
     return from_ip < MAX_OTHER_CONNECTIONS and others < MAX_CONNECTIONS - MAX_CLIENT_CONNECTIONS
 end
 
-function Server:advance(conn)
-    for _ = 1, 8 do
-        if conn.done then break end
-        if conn.state == "reading" then
-            self:read_request(conn)
-            if conn.state == "reading" then break end
-        elseif conn.state == "receiving" then
-            if not self:read_body(conn) then break end
-        else
-            self:send_response(conn)
-        end
-    end
-end
-
--- Called repeatedly by the screen. Never waits, so the interface stays responsive during transfers.
-function Server:tick()
-    if not self.listener then
+-- One step of a connection. Returns true when it moved, so it is worth trying again in this tick.
+function Server:step(conn)
+    if conn.done then
         return false
     end
-    local client = self.listener:accept()
-    if client then
+    if conn.state == "reading" then
+        return self:read_request(conn)
+    elseif conn.state == "receiving" then
+        return self:read_body(conn)
+    end
+    return self:send_response(conn)
+end
+
+-- Several at a time: a browser opens a few connections at once, for the covers of a page.
+function Server:accept()
+    for _ = 1, MAX_ACCEPTS do
+        local client = self.listener:accept()
+        if not client then
+            return
+        end
         client:settimeout(0)
         local ip = client:getpeername()
         -- A blocked address is dropped at once, so it cannot hold a place until its request times out.
@@ -270,13 +279,35 @@ function Server:tick()
             client:close()
         end
     end
+end
+
+-- Called repeatedly by the screen. Never waits, so the interface stays responsive during transfers.
+function Server:tick()
+    if not self.listener then
+        return false
+    end
+    self:accept()
+    local stop_at = socket.gettime() + TICK_BUDGET
+    -- Rounds over every connection, so one big transfer does not hold back the others, until none of them
+    -- moves or the time of this tick is over.
+    for _ = 1, MAX_PASSES do
+        local moved = false
+        for _, conn in ipairs(self.connections) do
+            -- An error in one request ends that connection, never the reader the person is using.
+            local ok, progress = pcall(self.step, self, conn)
+            if not ok then
+                conn.done = true
+            elseif progress then
+                moved = true
+            end
+        end
+        if not moved or socket.gettime() >= stop_at then
+            break
+        end
+    end
     local now = os.time()
     for index = #self.connections, 1, -1 do
         local conn = self.connections[index]
-        -- An error in one request ends that connection, never the reader the person is using.
-        if not pcall(self.advance, self, conn) then
-            conn.done = true
-        end
         if conn.done or now > conn.deadline then
             self:close_connection(conn)
             table.remove(self.connections, index)
