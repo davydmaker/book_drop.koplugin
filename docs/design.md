@@ -24,7 +24,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 | Secret code | The address carries a random code from `/dev/urandom`, new at each opening. Without it, every answer is the same 404. |
 | Approval on the device | The first device with the code must be approved on the screen. |
 | One device | Once approved, no other address is served. |
-| No paths to download | Files are requested by number from a list built by the server, the number never changes within a session, and the file must still be on the list. There is no path parameter. |
+| No paths to download | Files are requested by number from a list built by the server, and the number never changes within a session. Only a path the server listed can be reached, and only while it is still a regular file, not a link. There is no path parameter. |
 | What can be downloaded | Only images from the screenshots folder and book formats from the books folder. `.sdr` folders, hidden items, links and KOReader's data folder stay out. |
 | Restricted uploads | Only book formats, up to 500 MB, always to the same place. A name cannot carry a folder, control characters, invalid UTF-8 or characters that reverse how it is shown, and leading dots are removed, so it cannot create a hidden file. |
 | No replacing | An existing name is refused, before sending and again at the end. |
@@ -62,7 +62,7 @@ While the screen is open, the device does not sleep: if it did, the Wi-Fi would 
 
 - There is no `.zip` of books, because building one would freeze the screen for a long time.
 - The screenshots zip has no compression, since PNG is already compressed. The screen may freeze for a moment while it is built. It is kept while the screenshots stay the same, so asking again serves the same file, and it is refused when it would leave less than 50 MB free, since the cache shares its partition with KOReader's settings. A zip smaller than its files counts as a failed write and is not served.
-- Each cover is read while the interface waits, typically for a few milliseconds.
+- Each cover is read while the interface waits, typically for a few milliseconds. A cover or a download checks only its own file; the books folder is walked again only for the Books page, at most every 5 seconds.
 - Networks with client isolation, common on guest Wi-Fi, stop the phone from reaching the device.
 - `Writer:addFileFromMemory` in KOReader writes the `0644` permission as decimal 644, which leaves extracted files unreadable. That is why the plugin uses `addPath`.
 

@@ -119,7 +119,8 @@ end
 -- opts: token, host (the "ip:port" this server answers to), strings (a table from i18n.lua), list_shots()
 -- and list_books() returning { { name, path, size } }, build_zip() returning { path, size } or nil and "space",
 -- can_store(name, size) returning nil or a key of UPLOAD_ERRORS, read_cover(path) returning the image and
--- its type, or nil, on_new_client(ip).
+-- its type, or nil, stat_file(path) returning the size of a regular file (nil for a link or anything else),
+-- on_new_client(ip).
 function Access.new(opts)
     return setmetatable({
         token = opts.token,
@@ -128,6 +129,7 @@ function Access.new(opts)
         read_cover = opts.read_cover,
         list_shots = opts.list_shots,
         list_books = opts.list_books,
+        stat_file = opts.stat_file,
         build_zip = opts.build_zip,
         can_store = opts.can_store,
         on_new_client = opts.on_new_client,
@@ -246,23 +248,25 @@ function Access:assign_ids(section, files)
         if not ids.by_path[file.path] then
             ids.last = ids.last + 1
             ids.by_path[file.path] = ids.last
-            ids.by_id[ids.last] = file.path
+            ids.by_id[ids.last] = { path = file.path, name = file.name }
         end
         file.id = ids.by_path[file.path]
     end
 end
 
 -- Numbers stay the same during a session, so a file received meanwhile cannot turn a link into another file.
-function Access:find_file(section, id, files)
-    local path = self.ids[section].by_id[tonumber(id)]
-    if not path then
+-- Only a path the server listed can be reached, and only while it is still a regular file: checking that one
+-- path is enough, so a cover or a download never has to walk the whole folder again.
+function Access:find_file(section, id)
+    local entry = self.ids[section].by_id[tonumber(id)]
+    if not entry then
         return nil
     end
-    for _, file in ipairs(files) do
-        if file.path == path then
-            return file
-        end
+    local size = self.stat_file(entry.path)
+    if not size then
+        return nil
     end
+    return { name = entry.name, path = entry.path, size = size }
 end
 
 function Access:send_page()
@@ -534,7 +538,7 @@ function Access:handle(request, ip)
     end
     local shot_id = rest:match("^/shot/(%d+)$")
     if shot_id then
-        local file = self:find_file("shot", shot_id, self.list_shots())
+        local file = self:find_file("shot", shot_id)
         if not file or not Access.image_type(file.name) then
             return self:reject(ip)
         end
@@ -542,7 +546,7 @@ function Access:handle(request, ip)
     end
     local cover_id = rest:match("^/cover/(%d+)$")
     if cover_id then
-        local file = self:find_file("book", cover_id, self.list_books())
+        local file = self:find_file("book", cover_id)
         if not file or not Access.is_book(file.name) then
             return self:reject(ip)
         end
@@ -550,7 +554,7 @@ function Access:handle(request, ip)
     end
     local book_id = rest:match("^/book/(%d+)$")
     if book_id then
-        local file = self:find_file("book", book_id, self.list_books())
+        local file = self:find_file("book", book_id)
         if not file or not Access.is_book(file.name) then
             return self:reject(ip)
         end

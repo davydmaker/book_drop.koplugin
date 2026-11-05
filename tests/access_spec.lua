@@ -33,6 +33,16 @@ local BOOKS = {
     { name = "<b>dois</b>.pdf", label = "<b>dois</b>.pdf", path = "/books/dois.pdf", size = 3 * 1024 * 1024 },
     { name = "config.lua", label = "config.lua", path = "/books/config.lua", size = 4 },
 }
+-- What the disk would say: a path is a file while it is in one of the lists, unless it became a link.
+local LINKS = {}
+local function stat_file(path)
+    if LINKS[path] then return nil end
+    for _, list in ipairs({ BOOKS, shots() }) do
+        for _, file in ipairs(list) do
+            if file.path == path then return file.size end
+        end
+    end
+end
 local function new_access(language)
     local asked = {}
     local access = Access.new{
@@ -42,6 +52,7 @@ local function new_access(language)
         end,
         list_shots = shots,
         list_books = function() return BOOKS end,
+        stat_file = stat_file,
         can_store = function(name, size)
             if name == "existe.epub" then return "exists" end
             if size == 999 then return "space" end
@@ -160,6 +171,21 @@ test("a deleted file is no longer served", function()
     local removed = table.remove(BOOKS, 1)
     eq(get(a, "/" .. TOKEN .. "/book/1").path, nil)
     table.insert(BOOKS, 1, removed)
+end)
+test("a listed file replaced by a link is no longer served", function()
+    local a = approved()
+    LINKS["/books/um.epub"] = true
+    eq(get(a, "/" .. TOKEN .. "/book/1").path, nil)
+    eq(get(a, "/" .. TOKEN .. "/cover/1").status, 404)
+    LINKS["/books/um.epub"] = nil
+    eq(get(a, "/" .. TOKEN .. "/book/1").path, "/books/um.epub")
+end)
+test("a cover or a download does not walk the folder again", function()
+    local a = approved()
+    local walks = 0
+    a.list_books = function() walks = walks + 1; return BOOKS end
+    get(a, "/" .. TOKEN .. "/cover/1"); get(a, "/" .. TOKEN .. "/book/1"); get(a, "/" .. TOKEN .. "/shot/1")
+    eq(walks, 0)
 end)
 test("a number never listed opens nothing", function()
     local a = new_access()

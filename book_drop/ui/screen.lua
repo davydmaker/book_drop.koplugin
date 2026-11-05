@@ -155,13 +155,22 @@ function Screen:list_shots()
     return files
 end
 
--- The list comes from walking the folder, and each cover asks for it, so it is kept for a moment.
+-- The list comes from walking the folder, so it is kept for a moment, for the grid and the list views.
 function Screen:list_books()
     local now = os.time()
     if not self.books_cache or now - self.books_cache_time > BOOKS_CACHE_SECONDS then
         self.books_cache, self.books_cache_time = self.storage:list_books(), now
+        self.book_count = #self.books_cache
     end
     return self.books_cache
+end
+
+-- symlinkattributes, so a listed file replaced by a link stops being served.
+local function regular_file_size(path)
+    local attributes = lfs.symlinkattributes(path)
+    if attributes and attributes.mode == "file" then
+        return attributes.size
+    end
 end
 
 -- Returns { path, size }, or nil and "space" when it does not fit. The zip is kept while the screenshots stay
@@ -252,6 +261,7 @@ function Screen:start_sharing()
         read_cover = Cover.read,
         list_shots = function() return self:list_shots() end,
         list_books = function() return self:list_books() end,
+        stat_file = regular_file_size,
         can_store = function(name, size) return self.storage:can_store(name, size) end,
         build_zip = function() return self:build_zip() end,
         on_new_client = function(client_ip) self:ask_permission(client_ip) end,
@@ -324,9 +334,11 @@ function Screen:on_receiving(name)
     self:show_sharing()
 end
 
+-- Counts the new book instead of walking the folder again: the list is read again only when the browser asks.
 function Screen:on_received(name)
     self.received = self.received + 1
     self.books_cache = nil
+    self.book_count = (self.book_count or 0) + 1
     self.activity = string.format(self.strings.last_received, name)
     self:show_sharing()
 end
@@ -415,7 +427,7 @@ end
 
 function Screen:counts_text()
     local s = self.strings
-    local parts = { s.books(#self:list_books()), s.shots(#self:list_shots()) }
+    local parts = { s.books(self.book_count or #self:list_books()), s.shots(#self:list_shots()) }
     if self.received > 0 then
         parts[#parts + 1] = s.received(self.received)
     end
