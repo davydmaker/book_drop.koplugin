@@ -1,0 +1,23 @@
+Book Drop
+Copyright (C) 2026 Davyd Maker
+https://github.com/davydmaker/book_drop.koplugin
+
+CONTENT (art and texts) is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International license. See LICENSE-CONTENT. This covers:
+
+- book_drop/i18n.lua
+- docs/brand/, docs/screenshots/ and docs/social-preview.png
+- tools/make_brand_art.py and tools/make_demo_library.py, which hold the art as drawing code, and everything they generate
+
+CODE (everything else) is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 only, as published by the Free Software Foundation. See LICENSE. It is distributed WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+NAMES: as an additional term under section 7(e) of the GNU General Public License, these licenses grant no rights under trademark law to the names "Book Drop" and "Davyd Maker". Modified versions must not use them in a way that suggests they are official, while keeping the attribution both licenses require.
+
+---
+
+CONTEÚDO (artes e textos) está sob a licença Creative Commons Atribuição-NãoComercial-CompartilhaIgual 4.0 Internacional. Veja LICENSE-CONTENT. Isso inclui book_drop/i18n.lua, docs/brand/, docs/screenshots/, docs/social-preview.png, tools/make_brand_art.py e tools/make_demo_library.py, com tudo o que eles geram.
+
+CÓDIGO (todo o restante) está sob a GNU General Public License, somente a versão 3. Veja LICENSE. É distribuído SEM NENHUMA GARANTIA.
+
+NOMES: estas licenças não concedem direitos de marca sobre "Book Drop" e "Davyd Maker". Versões modificadas não podem usar esses nomes de forma que pareçam oficiais, mantendo o crédito que as duas licenças exigem.
+
+Em caso de divergência, vale o texto em inglês acima.
