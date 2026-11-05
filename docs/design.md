@@ -61,7 +61,7 @@ While the screen is open, the device does not sleep: if it did, the Wi-Fi would 
 ## Limits
 
 - There is no `.zip` of books, because building one would freeze the screen for a long time.
-- The screenshots zip has no compression, since PNG is already compressed. The screen may freeze for a moment while it is built.
+- The screenshots zip has no compression, since PNG is already compressed. The screen may freeze for a moment while it is built. It is kept while the screenshots stay the same, so asking again serves the same file, and it is refused when it would leave less than 50 MB free, since the cache shares its partition with KOReader's settings. A zip smaller than its files counts as a failed write and is not served.
 - Each cover is read while the interface waits, typically for a few milliseconds.
 - Networks with client isolation, common on guest Wi-Fi, stop the phone from reaching the device.
 - `Writer:addFileFromMemory` in KOReader writes the `0644` permission as decimal 644, which leaves extracted files unreadable. That is why the plugin uses `addPath`.

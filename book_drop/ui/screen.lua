@@ -17,6 +17,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local lfs = require("libs/libkoreader-lfs")
 local socket = require("socket")
+local util = require("util")
 
 local Access = require("book_drop/access")
 local Cover = require("book_drop/cover")
@@ -35,6 +36,9 @@ local TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 local TOKEN_LENGTH = 16
 local SERIF = "noto/NotoSerif-Regular.ttf"
 local SERIF_BOLD = "noto/NotoSerif-Bold.ttf"
+-- Room for the headers of one entry in the zip, besides its name, which appears twice.
+local ZIP_ENTRY_BYTES = 128
+local ZIP_END_BYTES = 22
 
 local Screen = InputContainer:extend{
     name = "book_drop_screen",
@@ -121,7 +125,8 @@ function Screen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Device_screen:getWidth(), h = Device_screen:getHeight() }
     self.width, self.height = self.dimen.w, self.dimen.h
     self.text_width = self.width - 2 * Device_screen:scaleBySize(30)
-    self.zip_path = DataStorage:getDataDir() .. "/cache/book_drop.zip"
+    self.zip_dir = DataStorage:getDataDir() .. "/cache"
+    self.zip_path = self.zip_dir .. "/book_drop.zip"
     self.storage = Storage.new{ dir = self.books_dir, skip_dir = DataStorage:getDataDir() }
     self.received = 0
     self.strings = I18n[self.language or I18n.language_from(G_reader_settings:readSetting("language"))]
@@ -136,9 +141,12 @@ function Screen:list_shots()
         pcall(function()
             for name in lfs.dir(dir) do
                 local path = dir .. "/" .. name
-                -- symlinkattributes, so a link never leads out of the folder.
-                if name:sub(1, 1) ~= "." and Access.image_type(name) and lfs.symlinkattributes(path, "mode") == "file" then
-                    files[#files + 1] = { name = name, path = path, size = lfs.attributes(path, "size") }
+                if name:sub(1, 1) ~= "." and Access.image_type(name) then
+                    -- symlinkattributes, so a link never leads out of the folder.
+                    local attributes = lfs.symlinkattributes(path)
+                    if attributes and attributes.mode == "file" then
+                        files[#files + 1] = { name = name, path = path, size = attributes.size, modified = attributes.modification }
+                    end
                 end
             end
         end)
@@ -156,20 +164,55 @@ function Screen:list_books()
     return self.books_cache
 end
 
+-- Returns { path, size }, or nil and "space" when it does not fit. The zip is kept while the screenshots stay
+-- the same, so asking again does not freeze the screen again.
 function Screen:build_zip()
+    local shots = self:list_shots()
+    local parts, data_bytes, needed = {}, 0, ZIP_END_BYTES
+    for index, file in ipairs(shots) do
+        parts[index] = string.format("%s/%d/%d", file.name, file.size, file.modified or 0)
+        data_bytes = data_bytes + file.size
+        needed = needed + file.size + ZIP_ENTRY_BYTES + 2 * #file.name
+    end
+    local signature = table.concat(parts, "\n")
+    if signature == self.zip_signature then
+        local size = lfs.attributes(self.zip_path, "size")
+        if size then
+            return { path = self.zip_path, size = size }
+        end
+    end
+    self.zip_signature = nil
+    os.remove(self.zip_path)
+    -- The cache shares its partition with KOReader's settings, which must still have room to be saved.
+    local available = util.diskUsage(self.zip_dir).available
+    if available and available < needed + Storage.FREE_MARGIN_BYTES then
+        return nil, "space"
+    end
     local Archiver = require("ffi/archiver")
     local writer = Archiver.Writer:new{}
-    os.remove(self.zip_path)
     if not writer:open(self.zip_path, "zip") then
         return nil
     end
     writer:setZipCompression("store")
+    local failed = false
     -- addFileFromMemory writes the mode as decimal 644, which leaves extracted files unreadable.
-    for _, file in ipairs(self:list_shots()) do
+    for _, file in ipairs(shots) do
         writer:addPath(file.name, file.path)
+        -- addPath returns false even when it works, since it ends on the end-of-list code, so its error is what tells.
+        if writer.err then
+            failed = true
+            break
+        end
     end
     writer:close()
-    return { path = self.zip_path, size = lfs.attributes(self.zip_path, "size") }
+    local size = lfs.attributes(self.zip_path, "size")
+    -- A failed final write is not reported, but a zip without compression is never smaller than its files.
+    if failed or not size or size < data_bytes then
+        os.remove(self.zip_path)
+        return nil
+    end
+    self.zip_signature = signature
+    return { path = self.zip_path, size = size }
 end
 
 -- The screen stays on while this is open: if the Kindle slept, the Wi-Fi would drop in the middle of a transfer.

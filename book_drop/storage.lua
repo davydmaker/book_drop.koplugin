@@ -9,8 +9,9 @@ Storage.__index = Storage
 
 local MAX_DEPTH = 6
 local MAX_BOOKS = 5000
--- Keeps room for the reading data KOReader writes next to the books.
+-- Keeps room for the reading data KOReader writes next to the books, and for its settings.
 local FREE_MARGIN_BYTES = 50 * 1024 * 1024
+Storage.FREE_MARGIN_BYTES = FREE_MARGIN_BYTES
 local TEMP_PREFIX = ".book_drop-"
 local TEMP_SUFFIX = ".part"
 

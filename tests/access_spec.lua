@@ -100,6 +100,13 @@ test("after approval, serves the list and the files", function()
     eq(r.path, "/shots/foto.jpg"); eq(r.content_type, "image/jpeg")
     eq(get(a, "/" .. TOKEN .. "/all.zip").path, "/tmp/a.zip")
 end)
+test("the zip reports when there is no room for it", function()
+    local a = approved()
+    a.build_zip = function() return nil, "space" end
+    eq(get(a, "/" .. TOKEN .. "/all.zip").status, 507)
+    a.build_zip = function() return nil end
+    eq(get(a, "/" .. TOKEN .. "/all.zip").status, 500)
+end)
 test("allows one device only", function()
     local a = approved()
     eq(get(a, "/" .. TOKEN .. "/", OTHER).status, 404)

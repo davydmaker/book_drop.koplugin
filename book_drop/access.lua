@@ -117,7 +117,7 @@ function Access:format_size(bytes)
 end
 
 -- opts: token, host (the "ip:port" this server answers to), strings (a table from i18n.lua), list_shots()
--- and list_books() returning { { name, path, size } }, build_zip() returning { path, size },
+-- and list_books() returning { { name, path, size } }, build_zip() returning { path, size } or nil and "space",
 -- can_store(name, size) returning nil or a key of UPLOAD_ERRORS, read_cover(path) returning the image and
 -- its type, or nil, on_new_client(ip).
 function Access.new(opts)
@@ -519,8 +519,11 @@ function Access:handle(request, ip)
         return response(200, self:upload_script(), { content_type = "text/javascript; charset=utf-8" })
     end
     if rest == "/all.zip" then
-        local zip = self.build_zip()
+        local zip, problem = self.build_zip()
         if not zip then
+            if problem == "space" then
+                return text_response(507, self.strings.zip_space)
+            end
             return text_response(500, self.strings.zip_failed)
         end
         return { status = 200, path = zip.path, size = zip.size, content_type = "application/zip", download_name = self.strings.zip_name }
