@@ -17,6 +17,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local lfs = require("libs/libkoreader-lfs")
 local socket = require("socket")
+local util = require("util")
 
 local Access = require("book_drop/access")
 local Cover = require("book_drop/cover")
@@ -31,10 +32,15 @@ local TICK_ACTIVE = 0.02
 local TICK_IDLE = 0.25
 local IDLE_LIMIT = 600
 local BOOKS_CACHE_SECONDS = 5
+-- Updates without a flash before a full refresh clears what e-ink leaves behind.
+local PARTIAL_REFRESHES = 8
 local TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 local TOKEN_LENGTH = 16
 local SERIF = "noto/NotoSerif-Regular.ttf"
 local SERIF_BOLD = "noto/NotoSerif-Bold.ttf"
+-- Room for the headers of one entry in the zip, besides its name, which appears twice.
+local ZIP_ENTRY_BYTES = 128
+local ZIP_END_BYTES = 22
 
 local Screen = InputContainer:extend{
     name = "book_drop_screen",
@@ -121,9 +127,11 @@ function Screen:init()
     self.dimen = Geom:new{ x = 0, y = 0, w = Device_screen:getWidth(), h = Device_screen:getHeight() }
     self.width, self.height = self.dimen.w, self.dimen.h
     self.text_width = self.width - 2 * Device_screen:scaleBySize(30)
-    self.zip_path = DataStorage:getDataDir() .. "/cache/book_drop.zip"
+    self.zip_dir = DataStorage:getDataDir() .. "/cache"
+    self.zip_path = self.zip_dir .. "/book_drop.zip"
     self.storage = Storage.new{ dir = self.books_dir, skip_dir = DataStorage:getDataDir() }
     self.received = 0
+    self.no_cover = {}
     self.strings = I18n[self.language or I18n.language_from(G_reader_settings:readSetting("language"))]
     self.tick_callback = function() self:tick() end
     self:start_sharing()
@@ -136,9 +144,12 @@ function Screen:list_shots()
         pcall(function()
             for name in lfs.dir(dir) do
                 local path = dir .. "/" .. name
-                -- symlinkattributes, so a link never leads out of the folder.
-                if name:sub(1, 1) ~= "." and Access.image_type(name) and lfs.symlinkattributes(path, "mode") == "file" then
-                    files[#files + 1] = { name = name, path = path, size = lfs.attributes(path, "size") }
+                if name:sub(1, 1) ~= "." and Access.image_type(name) then
+                    -- symlinkattributes, so a link never leads out of the folder.
+                    local attributes = lfs.symlinkattributes(path)
+                    if attributes and attributes.mode == "file" then
+                        files[#files + 1] = { name = name, path = path, size = attributes.size, modified = attributes.modification }
+                    end
                 end
             end
         end)
@@ -147,29 +158,87 @@ function Screen:list_shots()
     return files
 end
 
--- The list comes from walking the folder, and each cover asks for it, so it is kept for a moment.
+-- The list comes from walking the folder, so it is kept for a moment, for the grid and the list views.
 function Screen:list_books()
     local now = os.time()
     if not self.books_cache or now - self.books_cache_time > BOOKS_CACHE_SECONDS then
         self.books_cache, self.books_cache_time = self.storage:list_books(), now
+        self.book_count = #self.books_cache
     end
     return self.books_cache
 end
 
+-- A book without a usable cover is remembered, by path and date, so scrolling back does not open it again.
+-- Images are not kept: they would cost more memory than reading them again.
+function Screen:read_cover(path)
+    local key = string.format("%s/%s", path, tostring(lfs.attributes(path, "modification")))
+    if self.no_cover[key] then
+        return nil
+    end
+    local data, content_type = Cover.read(path)
+    if not data then
+        self.no_cover[key] = true
+    end
+    return data, content_type
+end
+
+-- symlinkattributes, so a listed file replaced by a link stops being served.
+local function regular_file_size(path)
+    local attributes = lfs.symlinkattributes(path)
+    if attributes and attributes.mode == "file" then
+        return attributes.size
+    end
+end
+
+-- Returns { path, size }, or nil and "space" when it does not fit. The zip is kept while the screenshots stay
+-- the same, so asking again does not freeze the screen again.
 function Screen:build_zip()
+    local shots = self:list_shots()
+    local parts, data_bytes, needed = {}, 0, ZIP_END_BYTES
+    for index, file in ipairs(shots) do
+        parts[index] = string.format("%s/%d/%d", file.name, file.size, file.modified or 0)
+        data_bytes = data_bytes + file.size
+        needed = needed + file.size + ZIP_ENTRY_BYTES + 2 * #file.name
+    end
+    local signature = table.concat(parts, "\n")
+    if signature == self.zip_signature then
+        local size = lfs.attributes(self.zip_path, "size")
+        if size then
+            return { path = self.zip_path, size = size }
+        end
+    end
+    self.zip_signature = nil
+    os.remove(self.zip_path)
+    -- The cache shares its partition with KOReader's settings, which must still have room to be saved.
+    local available = util.diskUsage(self.zip_dir).available
+    if available and available < needed + Storage.FREE_MARGIN_BYTES then
+        return nil, "space"
+    end
     local Archiver = require("ffi/archiver")
     local writer = Archiver.Writer:new{}
-    os.remove(self.zip_path)
     if not writer:open(self.zip_path, "zip") then
         return nil
     end
     writer:setZipCompression("store")
+    local failed = false
     -- addFileFromMemory writes the mode as decimal 644, which leaves extracted files unreadable.
-    for _, file in ipairs(self:list_shots()) do
+    for _, file in ipairs(shots) do
         writer:addPath(file.name, file.path)
+        -- addPath returns false even when it works, since it ends on the end-of-list code, so its error is what tells.
+        if writer.err then
+            failed = true
+            break
+        end
     end
     writer:close()
-    return { path = self.zip_path, size = lfs.attributes(self.zip_path, "size") }
+    local size = lfs.attributes(self.zip_path, "size")
+    -- A failed final write is not reported, but a zip without compression is never smaller than its files.
+    if failed or not size or size < data_bytes then
+        os.remove(self.zip_path)
+        return nil
+    end
+    self.zip_signature = signature
+    return { path = self.zip_path, size = size }
 end
 
 -- The screen stays on while this is open: if the Kindle slept, the Wi-Fi would drop in the middle of a transfer.
@@ -206,10 +275,12 @@ function Screen:start_sharing()
         token = token,
         host = string.format("%s:%d", ip, PORT),
         strings = self.strings,
-        read_cover = Cover.read,
+        read_cover = function(path) return self:read_cover(path) end,
         list_shots = function() return self:list_shots() end,
         list_books = function() return self:list_books() end,
+        stat_file = regular_file_size,
         can_store = function(name, size) return self.storage:can_store(name, size) end,
+        is_busy = function() return self.server ~= nil and self.server.uploading == true end,
         build_zip = function() return self:build_zip() end,
         on_new_client = function(client_ip) self:ask_permission(client_ip) end,
     }
@@ -240,21 +311,40 @@ function Screen:start_sharing()
     UIManager:scheduleIn(TICK_IDLE, self.tick_callback)
 end
 
+-- The answer only counts while this session is running: the question may outlive it by sleep or the idle limit.
 function Screen:ask_permission(client_ip)
+    local access = self.access
     self.confirm = ConfirmBox:new{
         text = string.format(self.strings.allow_question, client_ip),
         ok_text = self.strings.allow_button,
         cancel_text = self.strings.deny_button,
+        -- A tap outside the box would count as Deny, and a denied device stays out for the whole session.
+        dismissable = false,
         ok_callback = function()
-            self.access:approve(client_ip)
+            self.confirm = nil
+            if not self.server or self.access ~= access then
+                return
+            end
+            access:approve(client_ip)
             self.state = "connected"
             self:show_sharing()
         end,
         cancel_callback = function()
-            self.access:deny(client_ip)
+            self.confirm = nil
+            if not self.server or self.access ~= access then
+                return
+            end
+            access:deny(client_ip)
         end,
     }
     UIManager:show(self.confirm)
+end
+
+function Screen:close_confirm()
+    if self.confirm then
+        UIManager:close(self.confirm)
+        self.confirm = nil
+    end
 end
 
 function Screen:on_receiving(name)
@@ -262,9 +352,11 @@ function Screen:on_receiving(name)
     self:show_sharing()
 end
 
+-- Counts the new book instead of walking the folder again: the list is read again only when the browser asks.
 function Screen:on_received(name)
     self.received = self.received + 1
     self.books_cache = nil
+    self.book_count = (self.book_count or 0) + 1
     self.activity = string.format(self.strings.last_received, name)
     self:show_sharing()
 end
@@ -284,6 +376,7 @@ end
 
 function Screen:stop_sharing(message)
     UIManager:unschedule(self.tick_callback)
+    self:close_confirm()
     if self.server then
         self.server:stop()
         self.server = nil
@@ -318,7 +411,9 @@ function Screen:button(text, callback)
     }
 end
 
-function Screen:set_group(group)
+-- kind names the layout: a new one gets a full refresh, while a change of text in the same one, such as the
+-- name of the book arriving, does not flash the whole screen.
+function Screen:set_group(kind, group)
     if self[1] then
         self[1]:free()
     end
@@ -332,15 +427,23 @@ function Screen:set_group(group)
         height = self.height,
         CenterContainer:new{ dimen = Geom:new{ w = self.width, h = self.height }, group },
     }
+    local mode = "full"
+    if kind == self.shown_kind and (self.partial_refreshes or 0) < PARTIAL_REFRESHES then
+        mode = "ui"
+        self.partial_refreshes = (self.partial_refreshes or 0) + 1
+    else
+        self.partial_refreshes = 0
+    end
+    self.shown_kind = kind
     UIManager:setDirty(self, function()
-        return "full", self.dimen
+        return mode, self.dimen
     end)
 end
 
 function Screen:show_message(title, message)
     local gap = Device_screen:scaleBySize(16)
     self.state = "message"
-    self:set_group(VerticalGroup:new{
+    self:set_group("message", VerticalGroup:new{
         align = "center",
         self:paragraph(title, SERIF_BOLD, 28),
         VerticalSpan:new{ width = gap },
@@ -352,7 +455,7 @@ end
 
 function Screen:counts_text()
     local s = self.strings
-    local parts = { s.books(#self:list_books()), s.shots(#self:list_shots()) }
+    local parts = { s.books(self.book_count or #self:list_books()), s.shots(#self:list_shots()) }
     if self.received > 0 then
         parts[#parts + 1] = s.received(self.received)
     end
@@ -371,7 +474,7 @@ function Screen:show_waiting()
     local s = self.strings
     local gap = Device_screen:scaleBySize(12)
     local qr_size = math.floor(math.min(self.width, self.height) * 0.62)
-    self:set_group(VerticalGroup:new{
+    self:set_group("waiting", VerticalGroup:new{
         align = "center",
         self:paragraph(s.title, SERIF_BOLD, 28),
         VerticalSpan:new{ width = gap },
@@ -394,7 +497,7 @@ end
 function Screen:show_connected()
     local s = self.strings
     local gap = Device_screen:scaleBySize(16)
-    self:set_group(VerticalGroup:new{
+    self:set_group("connected", VerticalGroup:new{
         align = "center",
         self:paragraph(s.title, SERIF, 20),
         VerticalSpan:new{ width = gap * 2 },

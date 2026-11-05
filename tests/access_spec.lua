@@ -33,6 +33,16 @@ local BOOKS = {
     { name = "<b>dois</b>.pdf", label = "<b>dois</b>.pdf", path = "/books/dois.pdf", size = 3 * 1024 * 1024 },
     { name = "config.lua", label = "config.lua", path = "/books/config.lua", size = 4 },
 }
+-- What the disk would say: a path is a file while it is in one of the lists, unless it became a link.
+local LINKS = {}
+local function stat_file(path)
+    if LINKS[path] then return nil end
+    for _, list in ipairs({ BOOKS, shots() }) do
+        for _, file in ipairs(list) do
+            if file.path == path then return file.size end
+        end
+    end
+end
 local function new_access(language)
     local asked = {}
     local access = Access.new{
@@ -42,6 +52,7 @@ local function new_access(language)
         end,
         list_shots = shots,
         list_books = function() return BOOKS end,
+        stat_file = stat_file,
         can_store = function(name, size)
             if name == "existe.epub" then return "exists" end
             if size == 999 then return "space" end
@@ -100,6 +111,13 @@ test("after approval, serves the list and the files", function()
     eq(r.path, "/shots/foto.jpg"); eq(r.content_type, "image/jpeg")
     eq(get(a, "/" .. TOKEN .. "/all.zip").path, "/tmp/a.zip")
 end)
+test("the zip reports when there is no room for it", function()
+    local a = approved()
+    a.build_zip = function() return nil, "space" end
+    eq(get(a, "/" .. TOKEN .. "/all.zip").status, 507)
+    a.build_zip = function() return nil end
+    eq(get(a, "/" .. TOKEN .. "/all.zip").status, 500)
+end)
 test("allows one device only", function()
     local a = approved()
     eq(get(a, "/" .. TOKEN .. "/", OTHER).status, 404)
@@ -153,6 +171,21 @@ test("a deleted file is no longer served", function()
     local removed = table.remove(BOOKS, 1)
     eq(get(a, "/" .. TOKEN .. "/book/1").path, nil)
     table.insert(BOOKS, 1, removed)
+end)
+test("a listed file replaced by a link is no longer served", function()
+    local a = approved()
+    LINKS["/books/um.epub"] = true
+    eq(get(a, "/" .. TOKEN .. "/book/1").path, nil)
+    eq(get(a, "/" .. TOKEN .. "/cover/1").status, 404)
+    LINKS["/books/um.epub"] = nil
+    eq(get(a, "/" .. TOKEN .. "/book/1").path, "/books/um.epub")
+end)
+test("a cover or a download does not walk the folder again", function()
+    local a = approved()
+    local walks = 0
+    a.list_books = function() walks = walks + 1; return BOOKS end
+    get(a, "/" .. TOKEN .. "/cover/1"); get(a, "/" .. TOKEN .. "/book/1"); get(a, "/" .. TOKEN .. "/shot/1")
+    eq(walks, 0)
 end)
 test("a number never listed opens nothing", function()
     local a = new_access()
@@ -226,6 +259,15 @@ test("an upload neither replaces a file nor exceeds the free space", function()
     eq(post(a, "existe.epub", "10").status, 409)
     eq(post(a, "um.epub", "999").status, 507)
 end)
+test("another upload under way is reported before sending and when sending", function()
+    local a = approved()
+    a.is_busy = function() return true end
+    eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").status, 409)
+    eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").body, I18n.pt.upload_busy)
+    eq(post(a, "um.epub", "10").status, 409)
+    a.is_busy = function() return false end
+    eq(post(a, "um.epub", "10").upload.name, "um.epub")
+end)
 test("the check before an upload follows the same rules", function()
     local a = approved()
     eq(get(a, "/" .. TOKEN .. "/can-upload?name=um.epub&size=10").status, 200)
@@ -260,6 +302,7 @@ test("pages and script follow the language", function()
         eq(r.body:find('lang="' .. I18n[language].html_lang .. '"', 1, true) ~= nil, true)
         local script = get(a, "/" .. TOKEN .. "/upload.js").body
         eq(script:find("%CHECKING%", 1, true), nil)
+        eq(script:find("upload.onerror = explain", 1, true) ~= nil, true)
     end
 end)
 test("grid and list of books", function()

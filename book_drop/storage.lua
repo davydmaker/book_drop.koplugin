@@ -9,8 +9,9 @@ Storage.__index = Storage
 
 local MAX_DEPTH = 6
 local MAX_BOOKS = 5000
--- Keeps room for the reading data KOReader writes next to the books.
+-- Keeps room for the reading data KOReader writes next to the books, and for its settings.
 local FREE_MARGIN_BYTES = 50 * 1024 * 1024
+Storage.FREE_MARGIN_BYTES = FREE_MARGIN_BYTES
 local TEMP_PREFIX = ".book_drop-"
 local TEMP_SUFFIX = ".part"
 
@@ -27,10 +28,12 @@ function Storage:scan(dir, prefix, depth, files)
     for name in lfs.dir(dir) do
         if name:sub(1, 1) ~= "." and #files < MAX_BOOKS then
             local path = dir .. "/" .. name
-            -- symlinkattributes, so a link never leads out of the folder.
-            local mode = lfs.symlinkattributes(path, "mode")
+            -- symlinkattributes, so a link never leads out of the folder. One call gives the mode and the size.
+            local attributes = lfs.symlinkattributes(path)
+            local mode = attributes and attributes.mode
             if mode == "file" and Access.is_book(name) then
-                files[#files + 1] = { name = name, label = prefix .. name, path = path, size = lfs.attributes(path, "size") }
+                local label = prefix .. name
+                files[#files + 1] = { name = name, label = label, path = path, size = attributes.size, sort_key = label:lower() }
             elseif mode == "directory" and depth < MAX_DEPTH and not name:find("%.sdr$") and path ~= self.skip_dir then
                 self:scan(path, prefix .. name .. "/", depth + 1, files)
             end
@@ -44,7 +47,7 @@ function Storage:list_books()
         -- lfs.dir raises on an I/O error, and nothing up the stack should have to care.
         pcall(self.scan, self, self.dir, "", 1, files)
     end
-    table.sort(files, function(a, b) return a.label:lower() < b.label:lower() end)
+    table.sort(files, function(a, b) return a.sort_key < b.sort_key end)
     return files
 end
 

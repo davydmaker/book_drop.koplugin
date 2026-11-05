@@ -117,9 +117,10 @@ function Access:format_size(bytes)
 end
 
 -- opts: token, host (the "ip:port" this server answers to), strings (a table from i18n.lua), list_shots()
--- and list_books() returning { { name, path, size } }, build_zip() returning { path, size },
+-- and list_books() returning { { name, path, size } }, build_zip() returning { path, size } or nil and "space",
 -- can_store(name, size) returning nil or a key of UPLOAD_ERRORS, read_cover(path) returning the image and
--- its type, or nil, on_new_client(ip).
+-- its type, or nil, stat_file(path) returning the size of a regular file (nil for a link or anything else),
+-- is_busy() telling whether an upload is under way, on_new_client(ip).
 function Access.new(opts)
     return setmetatable({
         token = opts.token,
@@ -128,8 +129,10 @@ function Access.new(opts)
         read_cover = opts.read_cover,
         list_shots = opts.list_shots,
         list_books = opts.list_books,
+        stat_file = opts.stat_file,
         build_zip = opts.build_zip,
         can_store = opts.can_store,
+        is_busy = opts.is_busy,
         on_new_client = opts.on_new_client,
         client_ip = nil,
         pending_ip = nil,
@@ -151,6 +154,15 @@ function Access:deny(ip)
     if self.pending_ip == ip then
         self.pending_ip = nil
     end
+end
+
+function Access:is_denied(ip)
+    return self.denied[ip] == true
+end
+
+-- The device that is approved, or waiting for approval: the one the person is using.
+function Access:preferred_ip()
+    return self.client_ip or self.pending_ip
 end
 
 local function response(status, body, extra)
@@ -237,23 +249,25 @@ function Access:assign_ids(section, files)
         if not ids.by_path[file.path] then
             ids.last = ids.last + 1
             ids.by_path[file.path] = ids.last
-            ids.by_id[ids.last] = file.path
+            ids.by_id[ids.last] = { path = file.path, name = file.name }
         end
         file.id = ids.by_path[file.path]
     end
 end
 
 -- Numbers stay the same during a session, so a file received meanwhile cannot turn a link into another file.
-function Access:find_file(section, id, files)
-    local path = self.ids[section].by_id[tonumber(id)]
-    if not path then
+-- Only a path the server listed can be reached, and only while it is still a regular file: checking that one
+-- path is enough, so a cover or a download never has to walk the whole folder again.
+function Access:find_file(section, id)
+    local entry = self.ids[section].by_id[tonumber(id)]
+    if not entry then
         return nil
     end
-    for _, file in ipairs(files) do
-        if file.path == path then
-            return file
-        end
+    local size = self.stat_file(entry.path)
+    if not size then
+        return nil
     end
+    return { name = entry.name, path = entry.path, size = size }
 end
 
 function Access:send_page()
@@ -354,8 +368,17 @@ local UPLOAD_SCRIPT = [[
       row.textContent = file.name + ": " + message;
       send(files, index + 1);
     }
+    var checkUrl = base + "can-upload?name=" + encodeURIComponent(file.name) + "&size=" + file.size;
+    // A refusal that comes while the file is still going up can arrive as a cut connection: asking again tells why.
+    function explain() {
+      var again = new XMLHttpRequest();
+      again.open("GET", checkUrl);
+      again.onerror = function () { finish(TEXT.lost); };
+      again.onload = function () { finish(again.status === 200 ? TEXT.lost : again.responseText); };
+      again.send();
+    }
     var check = new XMLHttpRequest();
-    check.open("GET", base + "can-upload?name=" + encodeURIComponent(file.name) + "&size=" + file.size);
+    check.open("GET", checkUrl);
     check.onerror = function () { finish(TEXT.lost); };
     check.onload = function () {
       if (check.status !== 200) { finish(check.responseText); return; }
@@ -367,7 +390,7 @@ local UPLOAD_SCRIPT = [[
           row.textContent = file.name + ": " + Math.floor(event.loaded * 100 / event.total) + "%";
         }
       };
-      upload.onerror = function () { finish(TEXT.lost); };
+      upload.onerror = explain;
       upload.onload = function () {
         finish(upload.status === 201 ? TEXT.done : upload.responseText);
       };
@@ -411,6 +434,9 @@ function Access:check_upload(raw_name, size_text)
     end
     if not Access.is_book(name) then
         return text_response(415, s.upload_bad_format)
+    end
+    if self.is_busy and self.is_busy() then
+        return self:upload_error("busy")
     end
     local problem = self.can_store(name, size)
     if problem then
@@ -510,8 +536,11 @@ function Access:handle(request, ip)
         return response(200, self:upload_script(), { content_type = "text/javascript; charset=utf-8" })
     end
     if rest == "/all.zip" then
-        local zip = self.build_zip()
+        local zip, problem = self.build_zip()
         if not zip then
+            if problem == "space" then
+                return text_response(507, self.strings.zip_space)
+            end
             return text_response(500, self.strings.zip_failed)
         end
         return { status = 200, path = zip.path, size = zip.size, content_type = "application/zip", download_name = self.strings.zip_name }
@@ -522,7 +551,7 @@ function Access:handle(request, ip)
     end
     local shot_id = rest:match("^/shot/(%d+)$")
     if shot_id then
-        local file = self:find_file("shot", shot_id, self.list_shots())
+        local file = self:find_file("shot", shot_id)
         if not file or not Access.image_type(file.name) then
             return self:reject(ip)
         end
@@ -530,7 +559,7 @@ function Access:handle(request, ip)
     end
     local cover_id = rest:match("^/cover/(%d+)$")
     if cover_id then
-        local file = self:find_file("book", cover_id, self.list_books())
+        local file = self:find_file("book", cover_id)
         if not file or not Access.is_book(file.name) then
             return self:reject(ip)
         end
@@ -538,7 +567,7 @@ function Access:handle(request, ip)
     end
     local book_id = rest:match("^/book/(%d+)$")
     if book_id then
-        local file = self:find_file("book", book_id, self.list_books())
+        local file = self:find_file("book", book_id)
         if not file or not Access.is_book(file.name) then
             return self:reject(ip)
         end
