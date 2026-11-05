@@ -240,21 +240,40 @@ function Screen:start_sharing()
     UIManager:scheduleIn(TICK_IDLE, self.tick_callback)
 end
 
+-- The answer only counts while this session is running: the question may outlive it by sleep or the idle limit.
 function Screen:ask_permission(client_ip)
+    local access = self.access
     self.confirm = ConfirmBox:new{
         text = string.format(self.strings.allow_question, client_ip),
         ok_text = self.strings.allow_button,
         cancel_text = self.strings.deny_button,
+        -- A tap outside the box would count as Deny, and a denied device stays out for the whole session.
+        dismissable = false,
         ok_callback = function()
-            self.access:approve(client_ip)
+            self.confirm = nil
+            if not self.server or self.access ~= access then
+                return
+            end
+            access:approve(client_ip)
             self.state = "connected"
             self:show_sharing()
         end,
         cancel_callback = function()
-            self.access:deny(client_ip)
+            self.confirm = nil
+            if not self.server or self.access ~= access then
+                return
+            end
+            access:deny(client_ip)
         end,
     }
     UIManager:show(self.confirm)
+end
+
+function Screen:close_confirm()
+    if self.confirm then
+        UIManager:close(self.confirm)
+        self.confirm = nil
+    end
 end
 
 function Screen:on_receiving(name)
@@ -284,6 +303,7 @@ end
 
 function Screen:stop_sharing(message)
     UIManager:unschedule(self.tick_callback)
+    self:close_confirm()
     if self.server then
         self.server:stop()
         self.server = nil
