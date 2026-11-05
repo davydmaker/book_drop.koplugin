@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.1]
 
 - The approval question closes when sharing stops, and a tap outside it no longer counts as Deny.
 - The device in use keeps its own connections, so other devices on the network cannot take them.
