@@ -260,6 +260,23 @@ test("a file that cannot be opened is an error, not a broken download", function
     eq(client:response():match("Content%-Length: (%d+)"), "0")
 end)
 
+test("an error in a request ends only that connection, and is logged", function()
+    local logged = {}
+    local opts = { log = function(...) logged[#logged + 1] = table.concat({ ... }, " ") end }
+    local server, access = new_server(opts)
+    approve(server, access)
+    access.list_shots = function() error("disk went away") end
+    local broken = connect(server, fake_client(PHONE, request("/shots")))
+    local fine = connect(server, fake_client(PHONE, request("/")))
+    ticks(server, 5)
+    eq(broken.closed, true)
+    eq(#broken:response(), 0)
+    eq(fine:response():find("HTTP/1.1 200 OK", 1, true), 1)
+    eq(#logged, 1)
+    eq(logged[1]:find("disk went away", 1, true) ~= nil, true)
+    eq(logged[1]:find(TOKEN, 1, true), nil)
+end)
+
 local function upload(name, body, size)
     return request("/upload", "POST", string.format("X-File-Name: %s\r\nContent-Length: %d\r\n", name, size or #body)) .. body
 end

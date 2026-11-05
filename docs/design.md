@@ -36,7 +36,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 | Limits | Headers up to 8 KB, one upload at a time, and 30 seconds without progress end a connection. The device in use (approved, or waiting for approval) has 6 connections of its own; the other addresses share 6 more, at most 2 each, so they can never take its places. A blocked address is dropped as soon as it connects. |
 | Strikes per address | 20 invalid requests block that address only, so someone else on the network cannot end the session. The approved device is never blocked. |
 | Pages | Escaped names, a restrictive `Content-Security-Policy`, `nosniff`, and no cache except for covers. The only script is the upload one, served by the plugin, and the other pages work without it. |
-| Errors stay contained | An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. |
+| Errors stay contained | An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. The error goes to KOReader's log, without the request, which carries the code. |
 | After a crash | A marker file records that sharing started. If KOReader crashes or quits with the screen open, the next start closes the port, lets the device sleep again and removes temporary files. |
 
 ### Covers

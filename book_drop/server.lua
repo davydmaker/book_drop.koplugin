@@ -2,6 +2,16 @@ local socket = require("socket")
 
 local Access = require("book_drop/access")
 
+-- KOReader's logger writes to crash.log. Outside KOReader, as in the tests, print stands in for it.
+local has_logger, logger = pcall(require, "logger")
+local function warn(...)
+    if has_logger then
+        logger.warn(...)
+    else
+        print(...)
+    end
+end
+
 local Server = {}
 Server.__index = Server
 
@@ -16,7 +26,8 @@ local MAX_OTHER_CONNECTIONS = 2
 local REQUEST_TIMEOUT = 10
 local TRANSFER_TIMEOUT = 30
 
--- opts: access, ip (the address to listen on), port, storage, on_receiving(name), on_received(name).
+-- opts: access, ip (the address to listen on), port, storage, on_receiving(name), on_received(name), and
+-- optionally log(...), for errors in requests.
 function Server.new(opts)
     return setmetatable({
         access = opts.access,
@@ -25,6 +36,7 @@ function Server.new(opts)
         storage = opts.storage,
         on_receiving = opts.on_receiving,
         on_received = opts.on_received,
+        log = opts.log or warn,
         connections = {},
         last_activity = os.time(),
     }, Server)
@@ -304,6 +316,8 @@ function Server:tick()
             local ok, progress = pcall(self.step, self, conn)
             if not ok then
                 conn.done = true
+                -- Only the error itself: never the request, which carries the code of the address.
+                self.log("Book Drop: a request failed:", tostring(progress))
             elseif progress then
                 moved = true
             end
