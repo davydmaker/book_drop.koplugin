@@ -34,7 +34,7 @@ jobs:
             exit 1
           fi
       - name: Tests
-        run: luajit tests/access_spec.lua
+        run: for spec in tests/*_spec.lua; do luajit "$spec" || exit 1; done
       - name: Build package
         run: tools/package.sh
       - name: Attach package to the release

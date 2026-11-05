@@ -153,6 +153,15 @@ function Access:deny(ip)
     end
 end
 
+function Access:is_denied(ip)
+    return self.denied[ip] == true
+end
+
+-- The device that is approved, or waiting for approval: the one the person is using.
+function Access:preferred_ip()
+    return self.client_ip or self.pending_ip
+end
+
 local function response(status, body, extra)
     local result = { status = status, body = body, content_type = "text/html; charset=utf-8" }
     for key, value in pairs(extra or {}) do

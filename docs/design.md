@@ -33,7 +33,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 | Uploads from its own page only | `POST` requires the `X-File-Name` header, which another site's page cannot send without permission, and an `Origin` equal to the server's when present. Repeated headers and `Transfer-Encoding` are refused. |
 | Private networks only | Refuses to start outside 10.x, 172.16-31.x and 192.168.x, and refuses clients from outside. |
 | `Host` check | Blocks DNS rebinding, where a malicious page open on the phone would try to reach the device. |
-| Limits | Headers up to 8 KB, 6 connections for the approved device and 2 for any other address, 12 in total, one upload at a time, and 30 seconds without progress end a connection. |
+| Limits | Headers up to 8 KB, one upload at a time, and 30 seconds without progress end a connection. The device in use (approved, or waiting for approval) has 6 connections of its own; the other addresses share 6 more, at most 2 each, so they can never take its places. A blocked address is dropped as soon as it connects. |
 | Strikes per address | 20 invalid requests block that address only, so someone else on the network cannot end the session. The approved device is never blocked. |
 | Pages | Escaped names, a restrictive `Content-Security-Policy`, `nosniff`, and no cache except for covers. The only script is the upload one, served by the plugin, and the other pages work without it. |
 | Errors stay contained | An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. |
@@ -84,6 +84,7 @@ book_drop.koplugin/
 ## Tools
 
 - `luajit tests/access_spec.lua`: tests for the rules, including attack attempts and crafted EPUB metadata.
+- `luajit tests/server_spec.lua`: tests for the server with fake connections: places per address, uploads, downloads and errors.
 - With `KOREADER_DIR` pointing to a desktop KOReader:
   - `tools/koreader/check_server.sh` starts the real server and tests it with `curl`: approval, integrity of downloads and uploads, covers, the zip, cut and simultaneous uploads, and attack attempts.
   - `tools/koreader/run_emulator.sh` opens a window with the plugin.

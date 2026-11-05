@@ -1,0 +1,156 @@
+package.path = "./?.lua;" .. package.path
+-- The server only needs these from LuaSocket, so the tests run without a network.
+package.loaded.socket = package.loaded.socket or { gettime = os.clock }
+local Access = require("book_drop/access")
+local I18n = require("book_drop/i18n")
+local Server = require("book_drop/server")
+
+local passed, failed = 0, 0
+local function test(name, fn)
+    local ok, err = pcall(fn)
+    if ok then
+        passed = passed + 1
+    else
+        failed = failed + 1
+        print("FAILED: " .. name .. "\n  " .. tostring(err))
+    end
+end
+local function eq(actual, expected)
+    if actual ~= expected then
+        error(string.format("expected %s, got %s", tostring(expected), tostring(actual)), 2)
+    end
+end
+
+local TOKEN, HOST, PHONE = "abc123token", "192.168.0.5:8642", "192.168.0.20"
+
+-- A connection that hands out what was queued in `input`, in pieces of the size asked for.
+local function fake_client(ip, input)
+    local client = { ip = ip, input = input or "", output = {}, closed = false }
+    function client:getpeername() return self.ip end
+    function client:settimeout() end
+    function client:receive(size)
+        if #self.input == 0 then
+            if self.eof then return nil, "closed", "" end
+            return nil, "timeout", ""
+        end
+        local chunk = self.input:sub(1, size)
+        self.input = self.input:sub(size + 1)
+        if #chunk == size then return chunk end
+        return nil, "timeout", chunk
+    end
+    function client:send(data, first)
+        first = first or 1
+        local last = #data
+        if self.send_limit then last = math.min(last, first + self.send_limit - 1) end
+        self.output[#self.output + 1] = data:sub(first, last)
+        return last
+    end
+    function client:close() self.closed = true end
+    function client:response() return table.concat(self.output) end
+    return client
+end
+
+local function fake_storage()
+    local storage = { files = {}, committed = {}, discarded = 0, next_temp = 0 }
+    function storage:begin()
+        self.next_temp = self.next_temp + 1
+        return os.tmpname()
+    end
+    function storage:commit(temp, name)
+        local file = io.open(temp, "rb")
+        self.committed[name] = file:read("*a")
+        file:close()
+        os.remove(temp)
+        return true
+    end
+    function storage:discard(temp)
+        self.discarded = self.discarded + 1
+        os.remove(temp)
+    end
+    return storage
+end
+
+local function new_server(opts)
+    opts = opts or {}
+    local access = Access.new{
+        token = TOKEN, host = HOST, strings = I18n.en,
+        read_cover = function() end,
+        list_shots = function() return {} end,
+        list_books = function() return {} end,
+        stat_file = function() end,
+        can_store = function() end,
+        build_zip = function() end,
+        on_new_client = function() end,
+        is_busy = function() return opts.server and opts.server.uploading end,
+    }
+    local server = Server.new{ access = access, ip = "192.168.0.5", port = 8642, storage = fake_storage(), log = opts.log or function() end }
+    opts.server = server
+    local queue = {}
+    server.listener = {
+        accept = function() return table.remove(queue, 1) end,
+        close = function() end,
+    }
+    server.queue = queue
+    return server, access
+end
+
+local function approve(server, access)
+    access:handle(string.format("GET /%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", TOKEN, HOST), PHONE)
+    access:approve(PHONE)
+end
+
+local function connect(server, client)
+    table.insert(server.queue, client)
+    return client
+end
+
+local function ticks(server, count)
+    for _ = 1, count or 20 do server:tick() end
+end
+
+local function from(server, ip)
+    local count = 0
+    for _, conn in ipairs(server.connections) do
+        if conn.ip == ip then count = count + 1 end
+    end
+    return count
+end
+
+test("other addresses cannot take the places of the device in use", function()
+    local server, access = new_server()
+    approve(server, access)
+    for host = 101, 106 do
+        for _ = 1, 3 do connect(server, fake_client("192.168.0." .. host)) end
+    end
+    ticks(server, 30)
+    eq(#server.connections, 6)
+    for _ = 1, 6 do connect(server, fake_client(PHONE)) end
+    ticks(server, 10)
+    eq(from(server, PHONE), 6)
+    eq(#server.connections, 12)
+end)
+
+test("the device waiting for approval also has its places", function()
+    local server, access = new_server()
+    access:handle(string.format("GET /%s/ HTTP/1.1\r\nHost: %s\r\n\r\n", TOKEN, HOST), PHONE)
+    for host = 101, 106 do
+        for _ = 1, 2 do connect(server, fake_client("192.168.0." .. host)) end
+    end
+    ticks(server, 20)
+    connect(server, fake_client(PHONE))
+    ticks(server, 2)
+    eq(from(server, PHONE), 1)
+end)
+
+test("a blocked address is dropped as soon as it connects", function()
+    local server, access = new_server()
+    approve(server, access)
+    access.denied["192.168.0.99"] = true
+    local client = connect(server, fake_client("192.168.0.99"))
+    ticks(server, 2)
+    eq(client.closed, true)
+    eq(from(server, "192.168.0.99"), 0)
+end)
+
+print(string.format("%d passed, %d failed", passed, failed))
+os.exit(failed == 0 and 0 or 1)

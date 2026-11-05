@@ -79,7 +79,7 @@ A lista completa está em [docs/design.md](docs/design.md), em inglês.
 Com o [LuaJIT](https://luajit.org) instalado, a partir da raiz do repositório:
 
 ```sh
-luajit tests/access_spec.lua
+for spec in tests/*_spec.lua; do luajit "$spec"; done
 ```
 
 Com `KOREADER_DIR` apontando para um KOReader de desktop, `tools/koreader/check_server.sh` sobe o servidor real e testa com `curl`. Está tudo descrito em [docs/design.md](docs/design.md). Contribuições são aceitas sob as licenças do projeto.

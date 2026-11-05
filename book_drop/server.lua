@@ -213,17 +213,23 @@ function Server:send_response(conn)
     end
 end
 
+-- The device the person is using has its own places, so other addresses on the network can never take them,
+-- however many they are. The others share what is left.
 function Server:has_room(ip)
-    if #self.connections >= MAX_CONNECTIONS then
-        return false
-    end
-    local from_ip = 0
+    local preferred = self.access:preferred_ip()
+    local from_ip, others = 0, 0
     for _, conn in ipairs(self.connections) do
         if conn.ip == ip then
             from_ip = from_ip + 1
         end
+        if conn.ip ~= preferred then
+            others = others + 1
+        end
     end
-    return from_ip < (ip == self.access.client_ip and MAX_CLIENT_CONNECTIONS or MAX_OTHER_CONNECTIONS)
+    if ip == preferred then
+        return from_ip < MAX_CLIENT_CONNECTIONS
+    end
+    return from_ip < MAX_OTHER_CONNECTIONS and others < MAX_CONNECTIONS - MAX_CLIENT_CONNECTIONS
 end
 
 function Server:advance(conn)
@@ -249,7 +255,8 @@ function Server:tick()
     if client then
         client:settimeout(0)
         local ip = client:getpeername()
-        if self:has_room(ip) then
+        -- A blocked address is dropped at once, so it cannot hold a place until its request times out.
+        if not self.access:is_denied(ip) and self:has_room(ip) then
             table.insert(self.connections, { client = client, ip = ip, buffer = "", state = "reading", deadline = os.time() + REQUEST_TIMEOUT })
         else
             client:close()
