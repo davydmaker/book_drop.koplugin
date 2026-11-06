@@ -1,6 +1,6 @@
 # Book Drop: design and tools
 
-Sends books to the device and downloads books, screenshots and Book Rewind images to a phone or computer, over the local Wi-Fi network, with a QR code and nothing to install on the other device. `book_drop` is the plugin identifier.
+Sends books to the device and downloads books and screenshots to a phone or computer, over the local Wi-Fi network, with a QR code and nothing to install on the other device. `book_drop` is the plugin identifier.
 
 ## How it works
 
