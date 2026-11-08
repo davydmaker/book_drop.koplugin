@@ -83,6 +83,7 @@ The full list is in [docs/design.md](docs/design.md).
 - The server and the rules also run on the desktop build of KOReader, where the tests run. Keeping the device awake and opening the firewall are written for Kindle; on other devices, check your own sleep settings and firewall.
 - Networks with client isolation, common on guest Wi-Fi, stop the phone from reaching the device.
 - Always in portrait. Opened in landscape, it rotates the screen and restores the rotation on exit.
+- If the device is put to sleep with Book Drop open, it shows the Book Drop cover instead of the book cover. This applies when the KOReader sleep screen is set to show the book cover.
 
 ## Development
 

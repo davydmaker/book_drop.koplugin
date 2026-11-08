@@ -73,6 +73,7 @@ A lista completa está em [docs/design.md](docs/design.md), em inglês.
 - O servidor e as regras também rodam no KOReader de desktop, onde os testes são feitos. Manter o aparelho acordado e abrir o firewall foram escritos para Kindle; em outros aparelhos, confira as suas configurações de sono e de firewall.
 - Redes com isolamento de clientes, comuns em Wi-Fi de visitantes, impedem o celular de alcançar o aparelho.
 - Sempre na vertical. Se for aberto na horizontal, gira a tela e restaura a rotação ao sair.
+- Se o aparelho for posto para dormir com o Book Drop aberto, aparece a capa do Book Drop no lugar da capa do livro. Vale quando a tela de descanso do KOReader mostra a capa do livro.
 
 ## Desenvolvimento
 

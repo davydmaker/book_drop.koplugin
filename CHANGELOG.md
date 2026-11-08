@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.2]
+
+- The Book Drop cover on the sleep screen while the plugin is open.
+
 ## [1.0.1]
 
 - The approval question closes when sharing stops, and a tap outside it no longer counts as Deny.

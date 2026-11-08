@@ -3,7 +3,10 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 
 local I18n = require("book_drop/i18n")
+local PluginScreensaver = require("book_drop/screensaver")
 local Screen = require("book_drop/ui/screen")
+
+PluginScreensaver.install(debug.getinfo(1, "S").source:gsub("^@", ""):match("(.*)/") or ".")
 
 local BookDrop = WidgetContainer:extend{
     name = "book_drop",

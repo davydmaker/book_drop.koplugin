@@ -58,6 +58,8 @@ Covers are read on demand from EPUBs, and an EPUB can be crafted, so everything 
 
 While the screen is open, the device does not sleep: if it did, the Wi-Fi would drop in the middle of a transfer. On Kindle, the plugin turns on `preventScreenSaver` in `powerd`, and on any device it sets `PluginShare.pause_auto_suspend`. Both go back on closing, unless the `keepalive` plugin is active. The 10 minute limit avoids draining the battery if the screen is left open.
 
+Sleep still happens when the power button is pressed. Sharing stops then, the screen stays open, and if the KOReader sleep screen is set to the book cover, `assets/screensaver.png` shows instead. `book_drop/screensaver.lua` wraps KOReader's `Screensaver.setup`: KOReader picks the image as usual, and the plugin swaps it only when its screen is the topmost full-screen window. Nothing is saved, so closing the plugin brings back the book cover. Powering off, restarting or any other sleep screen mode are left alone. The image is 1200x1600, twice 600x800, so it stays sharp on larger screens; on 600x800 KOReader halves it.
+
 ## Limits
 
 - There is no `.zip` of books, because building one would freeze the screen for a long time.
@@ -78,6 +80,8 @@ book_drop.koplugin/
     storage.lua           what can be listed in the books folder and how a file gets there
     server.lua            HTTP server that does not block the interface
     ui/screen.lua         QR code, state, approval, firewall, sleep and closing
+    screensaver.lua       the plugin cover on the sleep screen
+  assets/screensaver.png  full-screen cover for the sleep screen, 1200x1600
   tests/, tools/, docs/   development
 ```
 
@@ -90,7 +94,8 @@ book_drop.koplugin/
   - `tools/koreader/check_server.sh` starts the real server and tests it with `curl`: approval, integrity of downloads and uploads, covers, the zip, cut and simultaneous uploads, and attack attempts.
   - `tools/koreader/run_emulator.sh` opens a window with the plugin.
   - `tools/koreader/render_readme_screens.sh` renders the device screens for the README. With `SERVE=600`, it also keeps a demo library online for 10 minutes, to capture the pages in a browser.
-  - `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview.
+  - `tools/koreader/run_headless.sh tools/koreader/check_screensaver.lua` checks when the plugin cover replaces the sleep screen image. With `OUTPUT_DIR`, it saves the resulting screen there.
+  - `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview. With `screensaver` as argument it draws `assets/screensaver.png` instead, in the same style.
 - `tools/package.sh` builds the release package.
 
 The firewall and `preventScreenSaver` exist only on Kindle and are not exercised by these tests.
