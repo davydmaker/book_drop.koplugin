@@ -2,6 +2,7 @@ package.path = "./?.lua;" .. package.path
 local Access = require("book_drop/access")
 local I18n = require("book_drop/i18n")
 local Cover = require("book_drop/cover")
+local Lan = require("book_drop/lan")
 
 local passed, failed = 0, 0
 local function test(name, fn)
@@ -57,7 +58,7 @@ local function new_access(language)
             if name == "existe.epub" then return "exists" end
             if size == 999 then return "space" end
         end,
-        build_zip = function() return { path = "/tmp/a.zip", size = 99 } end,
+        zip_status = function() return { path = "/tmp/a.zip", size = 99 } end,
         on_new_client = function(ip) asked[#asked + 1] = ip end,
     }
     return access, asked
@@ -82,10 +83,10 @@ local function approved()
 end
 
 test("accepts only private networks", function()
-    eq(Access.is_private_ip("10.0.70.138"), true); eq(Access.is_private_ip("192.168.1.2"), true)
-    eq(Access.is_private_ip("172.16.0.1"), true); eq(Access.is_private_ip("172.31.255.1"), true)
-    eq(Access.is_private_ip("172.32.0.1"), false); eq(Access.is_private_ip("8.8.8.8"), false)
-    eq(Access.is_private_ip("127.0.0.1"), false); eq(Access.is_private_ip("nil"), false); eq(Access.is_private_ip(nil), false)
+    eq(Lan.is_private_ip("10.0.70.138"), true); eq(Lan.is_private_ip("192.168.1.2"), true)
+    eq(Lan.is_private_ip("172.16.0.1"), true); eq(Lan.is_private_ip("172.31.255.1"), true)
+    eq(Lan.is_private_ip("172.32.0.1"), false); eq(Lan.is_private_ip("8.8.8.8"), false)
+    eq(Lan.is_private_ip("127.0.0.1"), false); eq(Lan.is_private_ip("nil"), false); eq(Lan.is_private_ip(nil), false)
 end)
 test("a wrong or missing code reveals nothing", function()
     local a = approved()
@@ -94,10 +95,10 @@ test("a wrong or missing code reveals nothing", function()
         eq(r.status, 404); eq(r.path, nil)
     end
 end)
-test("the first device needs permission on the Kindle", function()
+test("the first device needs permission on the e-reader", function()
     local a, asked = new_access()
     local r = get(a, "/" .. TOKEN .. "/")
-    eq(r.status, 200); eq(r.body:find("Confirme no Kindle", 1, true) ~= nil, true)
+    eq(r.status, 200); eq(r.body:find("Confirme no leitor", 1, true) ~= nil, true)
     eq(asked[1], PHONE)
     eq(get(a, "/" .. TOKEN .. "/shot/1").path, nil)
     get(a, "/" .. TOKEN .. "/")
@@ -113,10 +114,21 @@ test("after approval, serves the list and the files", function()
 end)
 test("the zip reports when there is no room for it", function()
     local a = approved()
-    a.build_zip = function() return nil, "space" end
+    a.zip_status = function() return nil, "space" end
     eq(get(a, "/" .. TOKEN .. "/all.zip").status, 507)
-    a.build_zip = function() return nil end
+    a.zip_status = function() return nil, "failed" end
     eq(get(a, "/" .. TOKEN .. "/all.zip").status, 500)
+end)
+test("while the zip is built, the page asks again by itself", function()
+    local a = approved()
+    a.zip_status = function() return nil, "pending" end
+    local r = get(a, "/" .. TOKEN .. "/all.zip")
+    eq(r.status, 503); eq(r.path, nil)
+    eq(r.body:find('http-equiv="refresh"', 1, true) ~= nil, true)
+    eq(r.body:find("Preparando o arquivo", 1, true) ~= nil, true)
+    eq(Access.response_head(r, #r.body):find("Retry-After: 2\r\n", 1, true) ~= nil, true)
+    eq(Access.response_head({ status = 200, content_type = "text/plain" }, 1):find("Retry-After", 1, true), nil)
+    eq(a.strikes[PHONE], nil)
 end)
 test("allows one device only", function()
     local a = approved()
@@ -281,19 +293,12 @@ test("a name with invalid UTF-8 is refused", function()
     eq(post(a, "%C3x.epub", "10").upload, nil)
     eq(post(a, "A%C3%A7%C3%A3o.epub", "10").upload.name, "Ação.epub")
 end)
-test("the three languages have the same strings", function()
-    for key in pairs(I18n.pt) do
-        eq(I18n.en[key] ~= nil, true); eq(I18n.es[key] ~= nil, true)
-    end
-    for key in pairs(I18n.en) do eq(I18n.pt[key] ~= nil, true) end
-    for key in pairs(I18n.es) do eq(I18n.pt[key] ~= nil, true) end
-end)
 test("the language comes from KOReader, with English for the others", function()
     eq(I18n.language_from("pt_BR"), "pt"); eq(I18n.language_from("es"), "es"); eq(I18n.language_from("en_US"), "en")
     eq(I18n.language_from("de"), "en"); eq(I18n.language_from(nil), "en"); eq(I18n.language_from("language_from"), "en")
 end)
 test("pages and script follow the language", function()
-    for language, word in pairs({ pt = "Enviar para o Kindle", en = "Send to the Kindle", es = "Enviar al Kindle" }) do
+    for language, word in pairs({ pt = "Enviar para o leitor", en = "Send to the e-reader", es = "Enviar al lector" }) do
         local a = new_access(language)
         get(a, "/" .. TOKEN .. "/")
         a:approve(PHONE)

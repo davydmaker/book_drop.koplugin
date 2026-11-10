@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0]
+
+- Texts on the screen and on the pages say "e-reader" instead of "Kindle", since the plugin runs on other e-readers too. The screenshots `.zip` is now called `screenshots.zip`.
+- The screen with the QR code says the address can also be typed in any browser, on a computer too.
+- Download All no longer freezes the request: the page says the `.zip` is being prepared and the download starts by itself when it is ready, while the e-reader shows the same message.
+- The firewall rules accept only private networks, and a port left open by a crash is closed as soon as KOReader starts again.
+- The power button now works with the screen open: the e-reader sleeps, and the transfer stops. The screen keeps the e-reader awake the way KOReader's own auto suspend does, instead of the setting that also blocked the power button.
+- Book Drop and other plugins that keep the e-reader awake no longer let it sleep in the middle of each other's work.
+- A screen that cannot open shows a message instead of closing KOReader, and stops everything it had started.
+- The Back button closes the screen, on e-readers with buttons.
+- Nothing is painted over the sleep screen while the e-reader sleeps.
+- A connection that sends nothing is no longer closed for the time the e-reader screen was busy.
+
 ## [1.0.2]
 
 - The Book Drop cover on the sleep screen while the plugin is open.

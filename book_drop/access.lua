@@ -1,4 +1,6 @@
 -- Decides what each request gets. It never touches the network or the disk, so every rule can be tested alone.
+local Lan = require("book_drop/lan")
+
 local Access = {}
 Access.__index = Access
 
@@ -32,15 +34,6 @@ local function escape_html(text)
     return (tostring(text):gsub("[&<>\"']", {
         ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ['"'] = "&quot;", ["'"] = "&#39;",
     }))
-end
-
-function Access.is_private_ip(ip)
-    local a, b = tostring(ip):match("^(%d+)%.(%d+)%.%d+%.%d+$")
-    a, b = tonumber(a), tonumber(b)
-    if not a then
-        return false
-    end
-    return a == 10 or (a == 172 and b >= 16 and b <= 31) or (a == 192 and b == 168)
 end
 
 local function extension_of(name)
@@ -117,7 +110,8 @@ function Access:format_size(bytes)
 end
 
 -- opts: token, host (the "ip:port" this server answers to), strings (a table from i18n.lua), list_shots()
--- and list_books() returning { { name, path, size } }, build_zip() returning { path, size } or nil and "space",
+-- and list_books() returning { { name, path, size } }, zip_status() returning { path, size } or nil and
+-- "pending" (being built), "space" or "failed",
 -- can_store(name, size) returning nil or a key of UPLOAD_ERRORS, read_cover(path) returning the image and
 -- its type, or nil, stat_file(path) returning the size of a regular file (nil for a link or anything else),
 -- is_busy() telling whether an upload is under way, on_new_client(ip).
@@ -130,7 +124,7 @@ function Access.new(opts)
         list_shots = opts.list_shots,
         list_books = opts.list_books,
         stat_file = opts.stat_file,
-        build_zip = opts.build_zip,
+        zip_status = opts.zip_status,
         can_store = opts.can_store,
         is_busy = opts.is_busy,
         on_new_client = opts.on_new_client,
@@ -347,6 +341,24 @@ function Access:shots_page()
     return response(200, self:page(s.shots_title, table.concat(body)))
 end
 
+-- While the zip is built on the device, the page asks again every two seconds, without a script, and the
+-- download starts by itself when it is ready.
+function Access:zip_response()
+    local s = self.strings
+    local zip, problem = self.zip_status()
+    if zip then
+        return { status = 200, path = zip.path, size = zip.size, content_type = "application/zip", download_name = s.zip_name }
+    end
+    if problem == "pending" then
+        local body = table.concat{ self:nav("shots"), "<p><b>", escape_html(s.zip_preparing), "</b></p><p>", escape_html(s.zip_preparing_hint), "</p>" }
+        return response(503, self:page(s.shots_title, body, { refresh = true }), { retry_after = 2 })
+    end
+    if problem == "space" then
+        return text_response(507, s.zip_space)
+    end
+    return text_response(500, s.zip_failed)
+end
+
 local UPLOAD_SCRIPT = [[
 (function () {
   var TEXT = {checking: %CHECKING%, lost: %LOST%, done: %DONE%};
@@ -484,7 +496,7 @@ function Access:handle(request, ip)
     if self.denied[ip] then
         return { status = 503, body = "", content_type = "text/plain", close_only = true }
     end
-    if #request > Access.MAX_REQUEST_BYTES or not Access.is_private_ip(ip) then
+    if #request > Access.MAX_REQUEST_BYTES or not Lan.is_private_ip(ip) then
         return self:reject(ip)
     end
     local method, target = request:match("^(%u+) ([^%s]+) HTTP/1%.[01]\r?\n")
@@ -536,14 +548,7 @@ function Access:handle(request, ip)
         return response(200, self:upload_script(), { content_type = "text/javascript; charset=utf-8" })
     end
     if rest == "/all.zip" then
-        local zip, problem = self.build_zip()
-        if not zip then
-            if problem == "space" then
-                return text_response(507, self.strings.zip_space)
-            end
-            return text_response(500, self.strings.zip_failed)
-        end
-        return { status = 200, path = zip.path, size = zip.size, content_type = "application/zip", download_name = self.strings.zip_name }
+        return self:zip_response()
     end
     local raw_name, size_text = rest:match("^/can%-upload%?name=([^&]*)&size=(%d+)$")
     if raw_name then
@@ -599,6 +604,9 @@ function Access.response_head(result, size)
         "X-Frame-Options: DENY",
         "Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
     }
+    if result.retry_after then
+        lines[#lines + 1] = "Retry-After: " .. result.retry_after
+    end
     if result.download_name then
         local safe = result.download_name:gsub("[^%w%._%-]", "_")
         lines[#lines + 1] = string.format("Content-Disposition: %s; filename=\"%s\"; filename*=UTF-8''%s",

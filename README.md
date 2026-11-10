@@ -87,10 +87,10 @@ The full list is in [docs/design.md](docs/design.md).
 
 ## Development
 
-With [LuaJIT](https://luajit.org) and [LuaFileSystem](https://lunarmodules.github.io/luafilesystem/) installed, from the repository root:
+With [LuaJIT](https://luajit.org), [LuaFileSystem](https://lunarmodules.github.io/luafilesystem/) and `zip` installed, from the repository root, the same checks as the CI (tests, texts and package):
 
 ```sh
-for spec in tests/*_spec.lua; do luajit "$spec"; done
+sh tools/check.sh
 ```
 
 With `KOREADER_DIR` pointing to a desktop KOReader, `tools/koreader/check_server.sh` starts the real server and tests it with `curl`. Everything is described in [docs/design.md](docs/design.md). Contributions are accepted under the project's licenses.

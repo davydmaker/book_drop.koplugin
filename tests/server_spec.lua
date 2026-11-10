@@ -3,7 +3,7 @@ package.path = "./?.lua;" .. package.path
 package.loaded.socket = package.loaded.socket or { gettime = os.clock }
 local Access = require("book_drop/access")
 local I18n = require("book_drop/i18n")
-local Server = require("book_drop/server")
+local Server = require("book_drop/http_server")
 
 local passed, failed = 0, 0
 local function test(name, fn)
@@ -83,7 +83,7 @@ local function new_server(opts)
             end
         end,
         can_store = function() end,
-        build_zip = function() end,
+        zip_status = function() end,
         on_new_client = function() end,
         is_busy = function() return opts.server and opts.server.uploading end,
     }
@@ -275,6 +275,51 @@ test("an error in a request ends only that connection, and is logged", function(
     eq(#logged, 1)
     eq(logged[1]:find("disk went away", 1, true) ~= nil, true)
     eq(logged[1]:find(TOKEN, 1, true), nil)
+end)
+
+-- os.time stands in for the clock, so a test can let seconds pass without waiting for them.
+local function with_clock(fn)
+    local real_time, now = os.time, os.time()
+    os.time = function(date) return date and real_time(date) or now end
+    local ok, err = pcall(fn, function(seconds) now = now + seconds end)
+    os.time = real_time
+    if not ok then error(err, 0) end
+end
+
+test("a connection that sends no request is closed after its deadline", function()
+    with_clock(function(advance)
+        local server = new_server()
+        local silent = connect(server, fake_client(PHONE))
+        for _ = 1, 9 do advance(1); server:tick() end
+        eq(silent.closed, false)
+        for _ = 1, 3 do advance(1); server:tick() end
+        eq(silent.closed, true)
+        eq(#server.connections, 0)
+    end)
+end)
+
+test("time the interface spent busy does not count against the connections waiting", function()
+    with_clock(function(advance)
+        local server = new_server()
+        local waiting = connect(server, fake_client(PHONE))
+        server:tick()
+        advance(15)
+        server:tick()
+        eq(waiting.closed, false)
+    end)
+end)
+
+test("a request head larger than the limit is closed without reaching the access", function()
+    local server, access = new_server()
+    approve(server, access)
+    local reached = 0
+    local handle = access.handle
+    access.handle = function(...) reached = reached + 1; return handle(...) end
+    local client = connect(server, fake_client(PHONE, "GET /" .. TOKEN .. "/ HTTP/1.1\r\nX: " .. string.rep("a", Access.MAX_REQUEST_BYTES + 10)))
+    ticks(server, 20)
+    eq(client.closed, true)
+    eq(#client:response(), 0)
+    eq(reached, 0)
 end)
 
 local function upload(name, body, size)

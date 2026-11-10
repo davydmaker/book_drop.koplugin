@@ -5,11 +5,15 @@ local DataStorage = require("datastorage")
 G_defaults = require("luadefaults"):open()
 G_reader_settings = require("luasettings"):open(DataStorage:getDataDir() .. "/settings.reader.lua")
 package.path = plugin_dir .. "/?.lua;" .. package.path
+-- What main.lua does when it loads.
+require("book_drop/lan").install("book_drop")
+require("book_drop/awake").install("book_drop")
 os.execute('mkdir -p "' .. DataStorage:getDataDir() .. '/cache"')
 local Device = require("device")
 local Screen = Device.screen
 require("document/canvascontext"):init(Device)
-require("ui/uimanager"):init()
+local UIManager = require("ui/uimanager")
+UIManager:init()
 local DropScreen = require("book_drop/ui/screen")
 
 local out = assert(os.getenv("SHOT_DIR"))
@@ -21,8 +25,6 @@ local screen = DropScreen:new{
     screenshot_dir = assert(os.getenv("SHOTS_DIR")),
     books_dir = assert(os.getenv("BOOKS_DIR")),
     language = os.getenv("UI_LANGUAGE") or "en",
-    open_firewall = function() end,
-    close_firewall = function() end,
 }
 assert(screen.url, "no address")
 local url = screen.url
@@ -47,7 +49,9 @@ ready:close()
 local started = os.time()
 local run_seconds = tonumber(os.getenv("RUN_SECONDS")) or 0
 while os.time() - started < run_seconds do
-    screen.server:tick()
+    -- The tasks KOReader would run: the server tick and the zip, which is built outside the requests.
+    UIManager:_checkTasks()
+    if not screen.server then break end
     if screen.access.pending_ip then
         screen.access:approve(screen.access.pending_ip)
     end

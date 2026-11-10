@@ -1,4 +1,3 @@
-local bit = require("bit")
 local Blitbuffer = require("ffi/blitbuffer")
 local Button = require("ui/widget/button")
 local CenterContainer = require("ui/widget/container/centercontainer")
@@ -9,20 +8,24 @@ local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local InputContainer = require("ui/widget/container/inputcontainer")
-local PluginShare = require("pluginshare")
 local QRWidget = require("ui/widget/qrwidget")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local lfs = require("libs/libkoreader-lfs")
-local socket = require("socket")
+local logger = require("logger")
 local util = require("util")
 
 local Access = require("book_drop/access")
+local Awake = require("book_drop/awake")
 local Cover = require("book_drop/cover")
 local I18n = require("book_drop/i18n")
-local Server = require("book_drop/server")
+local Lan = require("book_drop/lan")
+local Portrait = require("book_drop/portrait")
+local Refresh = require("book_drop/refresh")
+local Server = require("book_drop/http_server")
+local Sleep = require("book_drop/sleep")
 local Storage = require("book_drop/storage")
 
 local Device_screen = Device.screen
@@ -34,8 +37,6 @@ local IDLE_LIMIT = 600
 local BOOKS_CACHE_SECONDS = 5
 -- Updates without a flash before a full refresh clears what e-ink leaves behind.
 local PARTIAL_REFRESHES = 8
-local TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
-local TOKEN_LENGTH = 16
 local SERIF = "noto/NotoSerif-Regular.ttf"
 local SERIF_BOLD = "noto/NotoSerif-Bold.ttf"
 -- Room for the headers of one entry in the zip, besides its name, which appears twice.
@@ -49,49 +50,12 @@ local Screen = InputContainer:extend{
     screenshot_dir = nil,
     books_dir = nil,
     language = nil,
+    -- Only for the checks in the emulator: the address the session would find on the Wi-Fi.
     local_ip = nil,
-    open_firewall = nil,
-    close_firewall = nil,
 }
 
-local function random_token()
-    local source = io.open("/dev/urandom", "rb")
-    if not source then
-        return nil
-    end
-    local bytes = source:read(TOKEN_LENGTH)
-    source:close()
-    if not bytes or #bytes < TOKEN_LENGTH then
-        return nil
-    end
-    local out = {}
-    for i = 1, TOKEN_LENGTH do
-        local index = bytes:byte(i) % #TOKEN_ALPHABET + 1
-        out[i] = TOKEN_ALPHABET:sub(index, index)
-    end
-    return table.concat(out)
-end
-
--- Connecting a UDP socket picks the outgoing interface without sending any packet.
-local function detect_local_ip()
-    local udp = socket.udp()
-    if not udp then
-        return nil
-    end
-    udp:setpeername("10.255.255.255", 9)
-    local ip = udp:getsockname()
-    udp:close()
-    return ip
-end
-
-local function firewall(action)
-    if not Device:isKindle() then
-        return
-    end
-    os.execute(string.format("iptables -%s INPUT -p tcp --dport %d -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT 2>/dev/null", action, PORT))
-    os.execute(string.format("iptables -%s OUTPUT -p tcp --sport %d -m conntrack --ctstate ESTABLISHED -j ACCEPT 2>/dev/null", action, PORT))
-end
-
+-- The temporary files of a session: the screenshots zip and a book cut in the middle. The firewall and the
+-- awake mode have markers of their own, in lan.lua and awake.lua.
 function Screen.marker_path()
     return DataStorage:getDataDir() .. "/cache/book_drop.active"
 end
@@ -103,14 +67,10 @@ function Screen.write_marker()
     end
 end
 
--- A crash or a forced quit skips onCloseWidget, which would leave the port open and the Kindle awake.
+-- A crash or a forced quit skips onCloseWidget, which would leave the temporary files behind.
 function Screen.recover(books_dir)
     if lfs.attributes(Screen.marker_path(), "mode") ~= "file" then
         return
-    end
-    firewall("D")
-    if Device:isKindle() and not PluginShare.keepalive then
-        os.execute("lipc-set-prop com.lab126.powerd preventScreenSaver 0")
     end
     os.remove(DataStorage:getDataDir() .. "/cache/book_drop.zip")
     Storage.new{ dir = books_dir, skip_dir = DataStorage:getDataDir() }:remove_leftovers()
@@ -118,12 +78,11 @@ function Screen.recover(books_dir)
 end
 
 function Screen:init()
-    -- The layout only fits portrait; odd rotation modes are landscape.
-    local rotation = Device_screen:getRotationMode()
-    if bit.band(rotation, 1) == 1 then
-        self.restore_rotation = rotation
-        Device_screen:setRotationMode(Device_screen.DEVICE_ROTATED_UPRIGHT)
-    end
+    Sleep.watch(self)
+    Portrait.open(self, self.setup)
+end
+
+function Screen:setup()
     self.dimen = Geom:new{ x = 0, y = 0, w = Device_screen:getWidth(), h = Device_screen:getHeight() }
     self.width, self.height = self.dimen.w, self.dimen.h
     self.text_width = self.width - 2 * Device_screen:scaleBySize(30)
@@ -132,15 +91,25 @@ function Screen:init()
     self.storage = Storage.new{ dir = self.books_dir, skip_dir = DataStorage:getDataDir() }
     self.received = 0
     self.no_cover = {}
+    self.refresh = Refresh.new(PARTIAL_REFRESHES)
     self.strings = I18n[self.language or I18n.language_from(G_reader_settings:readSetting("language"))]
     self.tick_callback = function() self:tick() end
-    self:start_sharing()
+    self.zip_callback = function() self:build_requested_zip() end
+    if Device:hasKeys() then
+        self.key_events.Back = { { Device.input.group.Back } }
+    end
+    -- A failure halfway would leave the port open and the device awake until KOReader starts again.
+    local ok, err = xpcall(self.start_sharing, debug.traceback, self)
+    if not ok then
+        self:stop_sharing()
+        error(err, 0)
+    end
 end
 
 function Screen:list_shots()
     local files = {}
     local dir = self.screenshot_dir
-    if lfs.attributes(dir, "mode") == "directory" then
+    if dir and lfs.attributes(dir, "mode") == "directory" then
         pcall(function()
             for name in lfs.dir(dir) do
                 local path = dir .. "/" .. name
@@ -190,22 +159,26 @@ local function regular_file_size(path)
     end
 end
 
--- Returns { path, size }, or nil and "space" when it does not fit. The zip is kept while the screenshots stay
--- the same, so asking again does not freeze the screen again.
-function Screen:build_zip()
-    local shots = self:list_shots()
-    local parts, data_bytes, needed = {}, 0, ZIP_END_BYTES
-    for index, file in ipairs(shots) do
+local function zip_signature(files)
+    local parts = {}
+    for index, file in ipairs(files) do
         parts[index] = string.format("%s/%d/%d", file.name, file.size, file.modified or 0)
+    end
+    return table.concat(parts, "\n")
+end
+
+-- files: { { name, path, size, modified } }. Returns { path, size }, or nil and "space". The zip is kept while
+-- the screenshots stay the same, so asking again does not freeze the screen again.
+function Screen:build_zip(files)
+    local data_bytes, needed = 0, ZIP_END_BYTES
+    for _, file in ipairs(files) do
         data_bytes = data_bytes + file.size
         needed = needed + file.size + ZIP_ENTRY_BYTES + 2 * #file.name
     end
-    local signature = table.concat(parts, "\n")
-    if signature == self.zip_signature then
-        local size = lfs.attributes(self.zip_path, "size")
-        if size then
-            return { path = self.zip_path, size = size }
-        end
+    local signature = zip_signature(files)
+    local size = lfs.attributes(self.zip_path, "size")
+    if signature == self.zip_signature and size then
+        return { path = self.zip_path, size = size }
     end
     self.zip_signature = nil
     os.remove(self.zip_path)
@@ -222,7 +195,7 @@ function Screen:build_zip()
     writer:setZipCompression("store")
     local failed = false
     -- addFileFromMemory writes the mode as decimal 644, which leaves extracted files unreadable.
-    for _, file in ipairs(shots) do
+    for _, file in ipairs(files) do
         writer:addPath(file.name, file.path)
         -- addPath returns false even when it works, since it ends on the end-of-list code, so its error is what tells.
         if writer.err then
@@ -231,7 +204,7 @@ function Screen:build_zip()
         end
     end
     writer:close()
-    local size = lfs.attributes(self.zip_path, "size")
+    size = lfs.attributes(self.zip_path, "size")
     -- A failed final write is not reported, but a zip without compression is never smaller than its files.
     if failed or not size or size < data_bytes then
         os.remove(self.zip_path)
@@ -241,30 +214,52 @@ function Screen:build_zip()
     return { path = self.zip_path, size = size }
 end
 
--- The screen stays on while this is open: if the Kindle slept, the Wi-Fi would drop in the middle of a transfer.
-function Screen:keep_awake(on)
-    if (self.awake or false) == on then
+-- Called by the access for each request of the zip. Building it copies every screenshot and freezes the
+-- screen, so it never happens inside a request: the request schedules it, gets "pending", and the page asks
+-- again until the zip is ready. A failed build is reported once, to the next request.
+function Screen:zip_status()
+    if self.zip_problem then
+        local problem = self.zip_problem
+        self.zip_problem = nil
+        return nil, problem
+    end
+    local size = lfs.attributes(self.zip_path, "size")
+    if size and self.zip_signature and self.zip_signature == zip_signature(self:list_shots()) then
+        return { path = self.zip_path, size = size }
+    end
+    if not self.zip_building then
+        self.zip_building = true
+        Sleep.schedule(self, 0, self.zip_callback)
+    end
+    return nil, "pending"
+end
+
+-- The message reaches the screen before the work starts, so the frozen moment does not look like a crash.
+function Screen:build_requested_zip()
+    if not self.server then
+        self.zip_building = false
         return
     end
-    self.awake = on
-    if on then
-        self.previous_pause = PluginShare.pause_auto_suspend
-        PluginShare.pause_auto_suspend = true
-    else
-        PluginShare.pause_auto_suspend = self.previous_pause
+    local activity = self.activity
+    self.activity = self.strings.zip_preparing
+    self:show_sharing()
+    UIManager:forceRePaint()
+    local zip, problem = self:build_zip(self:list_shots())
+    if not zip then
+        self.zip_problem = problem or "failed"
     end
-    if Device:isKindle() and not PluginShare.keepalive then
-        os.execute(string.format("lipc-set-prop com.lab126.powerd preventScreenSaver %d", on and 1 or 0))
-    end
+    self.zip_building = false
+    self.activity = activity
+    self:show_sharing()
 end
 
 function Screen:start_sharing()
-    local ip = self.local_ip or detect_local_ip()
-    if not ip or not Access.is_private_ip(ip) then
+    local ip = self.local_ip or Lan.local_ip()
+    if not ip or not Lan.is_private_ip(ip) then
         self:show_message(self.strings.no_network_title, self.strings.no_network_text)
         return
     end
-    local token = random_token()
+    local token = Lan.random_token()
     if not token then
         self:show_message(self.strings.start_failed_title, self.strings.token_failed)
         return
@@ -281,34 +276,37 @@ function Screen:start_sharing()
         stat_file = regular_file_size,
         can_store = function(name, size) return self.storage:can_store(name, size) end,
         is_busy = function() return self.server ~= nil and self.server.uploading == true end,
-        build_zip = function() return self:build_zip() end,
+        zip_status = function() return self:zip_status() end,
         on_new_client = function(client_ip) self:ask_permission(client_ip) end,
     }
     self.storage:remove_leftovers()
-    self.server = Server.new{
+    local server = Server.new{
         access = self.access,
         ip = ip,
         port = PORT,
+        name = "Book Drop",
         storage = self.storage,
         on_receiving = function(name) self:on_receiving(name) end,
         on_received = function(name) self:on_received(name) end,
     }
-    local close_firewall = self.close_firewall or function() firewall("D") end
-    local open_firewall = self.open_firewall or function() firewall("A") end
-    close_firewall()
-    local ok, err = self.server:start()
+    local ok, err = server:start()
     if not ok then
-        self.server = nil
         self:show_message(self.strings.start_failed_title, tostring(err))
         return
     end
+    -- Only once the server is up, so a failed bind never leaves the port open.
+    if not Lan.open_firewall(PORT) then
+        server:stop()
+        self:show_message(self.strings.start_failed_title, self.strings.firewall_failed)
+        return
+    end
+    self.server = server
+    self.firewall_open = true
     Screen.write_marker()
-    open_firewall()
-    self.close_firewall_now = close_firewall
     self.state = "waiting"
-    self:keep_awake(true)
+    Awake.set(true)
     self:show_sharing()
-    UIManager:scheduleIn(TICK_IDLE, self.tick_callback)
+    Sleep.schedule(self, TICK_IDLE, self.tick_callback)
 end
 
 -- The answer only counts while this session is running: the question may outlive it by sleep or the idle limit.
@@ -337,7 +335,7 @@ function Screen:ask_permission(client_ip)
             access:deny(client_ip)
         end,
     }
-    UIManager:show(self.confirm)
+    Sleep.show(self, self.confirm)
 end
 
 function Screen:close_confirm()
@@ -362,7 +360,6 @@ function Screen:on_received(name)
 end
 
 function Screen:tick()
-    self.scheduled = false
     if not self.server then
         return
     end
@@ -371,23 +368,32 @@ function Screen:tick()
         self:stop_sharing(self.strings.idle_stop)
         return
     end
-    UIManager:scheduleIn(busy and TICK_ACTIVE or TICK_IDLE, self.tick_callback)
+    Sleep.schedule(self, busy and TICK_ACTIVE or TICK_IDLE, self.tick_callback)
 end
 
+-- Safe to call more than once and from every way out: the button, the idle limit, sleep and closing.
 function Screen:stop_sharing(message)
-    UIManager:unschedule(self.tick_callback)
+    Sleep.unschedule(self, self.tick_callback)
+    Sleep.unschedule(self, self.zip_callback)
+    self.zip_building, self.zip_problem, self.zip_signature = false, nil, nil
     self:close_confirm()
     if self.server then
         self.server:stop()
         self.server = nil
     end
-    if self.close_firewall_now then
-        self.close_firewall_now()
-        self.close_firewall_now = nil
+    if self.firewall_open then
+        self.firewall_open = nil
+        if not Lan.close_firewall(PORT) then
+            logger.warn("Book Drop: the port could not be closed; it is closed again when KOReader starts")
+        end
     end
-    self:keep_awake(false)
-    os.remove(self.zip_path)
-    self.storage:remove_leftovers()
+    Awake.set(false)
+    if self.zip_path then
+        os.remove(self.zip_path)
+    end
+    if self.storage then
+        self.storage:remove_leftovers()
+    end
     os.remove(Screen.marker_path())
     if message then
         self:show_message(self.strings.ended_title, message)
@@ -427,15 +433,8 @@ function Screen:set_group(kind, group)
         height = self.height,
         CenterContainer:new{ dimen = Geom:new{ w = self.width, h = self.height }, group },
     }
-    local mode = "full"
-    if kind == self.shown_kind and (self.partial_refreshes or 0) < PARTIAL_REFRESHES then
-        mode = "ui"
-        self.partial_refreshes = (self.partial_refreshes or 0) + 1
-    else
-        self.partial_refreshes = 0
-    end
-    self.shown_kind = kind
-    UIManager:setDirty(self, function()
+    local mode = self.refresh:mode(kind)
+    Sleep.dirty(self, function()
         return mode, self.dimen
     end)
 end
@@ -522,8 +521,22 @@ function Screen:onSuspend()
     self:stop_sharing(self.strings.slept)
 end
 
-function Screen:onSetRotationMode()
+function Screen:onResume()
+    self.refresh:reset()
+end
+
+Screen.onSetRotationMode = Portrait.ignore_rotation
+
+function Screen:onBack()
+    UIManager:close(self)
     return true
+end
+
+-- KOReader sends Close to every window before it quits (USB mode on a Kobo, closing the window on a computer).
+function Screen:onClose(arg)
+    if not (arg and arg.keep_screensaver) then
+        UIManager:close(self)
+    end
 end
 
 function Screen:onCloseWidget()
@@ -534,9 +547,7 @@ function Screen:onCloseWidget()
             FileManager.instance:onRefresh()
         end
     end
-    if self.restore_rotation then
-        Device_screen:setRotationMode(self.restore_rotation)
-    end
+    Portrait.close(self)
     UIManager:setDirty(nil, "full")
 end
 

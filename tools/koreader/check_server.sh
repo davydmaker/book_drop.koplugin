@@ -38,9 +38,9 @@ url="$(cat "$work/url")"
 base="${url%/*/}"
 fetch() { curl -s --max-time 15 -o /dev/null -w "%{http_code}" "$@"; }
 page="$(curl -s --max-time 5 "$url")"
-case "$page" in *"Confirm on the Kindle"*) check "asks for confirmation before approval" 1 1 ;; *) check "asks for confirmation before approval" 1 0; echo "      answer: $(printf %s "$page" | cut -c1-80)" ;; esac
+case "$page" in *"Confirm on the e-reader"*) check "asks for confirmation before approval" 1 1 ;; *) check "asks for confirmation before approval" 1 0; echo "      answer: $(printf %s "$page" | cut -c1-80)" ;; esac
 early="$(curl -s --max-time 5 "${url}shot/1")"
-case "$early" in *"Confirm on the Kindle"*) check "gives no file before approval" 1 1 ;; *) check "gives no file before approval" 1 0 ;; esac
+case "$early" in *"Confirm on the e-reader"*) check "gives no file before approval" 1 1 ;; *) check "gives no file before approval" 1 0 ;; esac
 check "takes no upload before approval" 404 "$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" -H "Expect:" -H "X-File-Name: antes.epub" --data-binary "abc" "${url}upload")"
 touch "$work/approve"
 sleep 2
@@ -61,7 +61,16 @@ curl -s --max-time 15 -o "$work/down/p1" "${url}shot/2" & p1=$!
 curl -s --max-time 15 -o "$work/down/p2" "${url}shot/2" & p2=$!
 wait $p1 $p2
 check "two downloads at once" "$big" "$(sums "$work/down/p2")"
-curl -s --max-time 15 -o "$work/down/all.zip" "${url}all.zip"
+zip_head="$(curl -s --max-time 5 -D - -o /dev/null "${url}all.zip")"
+case "$zip_head" in *"HTTP/1.1 503"*"Retry-After: 2"*) a=1 ;; *) a=0 ;; esac; check "the first request for the zip asks to wait" 1 "$a"
+zip_status=503
+tries=0
+while [ "$zip_status" = 503 ] && [ $tries -lt 20 ]; do
+    zip_status="$(curl -s --max-time 15 -o "$work/down/all.zip" -w "%{http_code}" "${url}all.zip")"
+    [ "$zip_status" = 503 ] && sleep 1
+    tries=$((tries + 1))
+done
+check "the zip is served once it is ready" 200 "$zip_status"
 (cd "$work/unzip" && unzip -q "$work/down/all.zip")
 check "the zip has the image intact" "$big" "$(sums "$work/unzip/grande.png")"
 check "the zip has only the images" 2 "$(ls "$work/unzip" | wc -l | tr -d ' ')"

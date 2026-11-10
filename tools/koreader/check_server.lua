@@ -6,6 +6,9 @@ local DataStorage = require("datastorage")
 G_defaults = require("luadefaults"):open()
 G_reader_settings = require("luasettings"):open(DataStorage:getDataDir() .. "/settings.reader.lua")
 package.path = plugin_dir .. "/?.lua;" .. package.path
+-- What main.lua does when it loads.
+require("book_drop/lan").install("book_drop")
+require("book_drop/awake").install("book_drop")
 os.execute('mkdir -p "' .. DataStorage:getDataDir() .. '/cache"')
 local Device = require("device")
 local Screen = Device.screen
@@ -14,7 +17,7 @@ local UIManager = require("ui/uimanager")
 UIManager:init()
 local ShareScreen = require("book_drop/ui/screen")
 
-local screen = ShareScreen:new{ screenshot_dir = shots, books_dir = assert(os.getenv("BOOKS_DIR")), language = os.getenv("UI_LANGUAGE") or "en", open_firewall = function() end, close_firewall = function() end }
+local screen = ShareScreen:new{ screenshot_dir = shots, books_dir = assert(os.getenv("BOOKS_DIR")), language = os.getenv("UI_LANGUAGE") or "en" }
 assert(screen.url, "no address: " .. tostring(screen.state))
 print("keeps awake on opening: " .. tostring(require("pluginshare").pause_auto_suspend == true))
 assert(screen.content_height <= Screen:getHeight(), "screen overflow: " .. screen.content_height)
@@ -26,7 +29,9 @@ file:close()
 local started = os.time()
 local last_received = 0
 while os.time() - started < tonumber(os.getenv("RUN_SECONDS") or 25) do
-    screen.server:tick()
+    -- The tasks KOReader would run: the server tick and the zip, which is built outside the requests.
+    UIManager:_checkTasks()
+    if not screen.server then break end
     if screen.received ~= last_received then
         last_received = screen.received
         assert(screen.content_height <= Screen:getHeight(), "screen overflow: " .. screen.content_height)

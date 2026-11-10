@@ -20,7 +20,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 |---|---|
 | Only on while in use | The server exists while the screen is open. It closes on Stop, on sleep and after 10 minutes without use. Only the approved device counts as use, so strangers or an unanswered approval cannot keep it running. |
 | One network | It listens only on the Wi-Fi address, not on USB networking. |
-| Firewall | The port opens in `iptables` during the transfer, and the rule goes away on closing. |
+| Firewall | The port opens in `iptables` during the transfer, only for 10.x, 172.16-31.x and 192.168.x, and the rules go away on closing. The port is listed in a marker (`koreader/settings/book_drop.firewall`) before any rule is added, and nothing opens if the marker cannot be written. |
 | Secret code | The address carries a random code from `/dev/urandom`, new at each opening. Without it, every answer is the same 404. |
 | Approval on the device | The first device with the code must be approved on the screen. |
 | One device | Once approved, no other address is served. |
@@ -37,7 +37,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 | Strikes per address | 20 invalid requests block that address only, so someone else on the network cannot end the session. The approved device is never blocked. |
 | Pages | Escaped names, a restrictive `Content-Security-Policy`, `nosniff`, and no cache except for covers. The only script is the upload one, served by the plugin, and the other pages work without it. |
 | Errors stay contained | An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. The error goes to KOReader's log, without the request, which carries the code. |
-| After a crash | A marker file records that sharing started. If KOReader crashes or quits with the screen open, the next start closes the port, lets the device sleep again and removes temporary files. |
+| After a crash | If KOReader crashes or quits with the screen open, the next start of KOReader closes the port (from `book_drop.firewall`), lets the device sleep again (from `book_drop.awake`, both in KOReader's settings folder) and removes temporary files (from `cache/book_drop.active`). A failure while opening the screen also stops the server, closes the port and lets the device sleep again. |
 
 ### Covers
 
@@ -56,14 +56,18 @@ Covers are read on demand from EPUBs, and an EPUB can be crafted, so everything 
 
 ## Sleep
 
-While the screen is open, the device does not sleep: if it did, the Wi-Fi would drop in the middle of a transfer. On Kindle, the plugin turns on `preventScreenSaver` in `powerd`, and on any device it sets `PluginShare.pause_auto_suspend`. Both go back on closing, unless the `keepalive` plugin is active. The 10 minute limit avoids draining the battery if the screen is left open.
+While the screen is open, the device does not sleep: if it did, the Wi-Fi would drop in the middle of a transfer. `book_drop/awake.lua` turns on `PluginShare.pause_auto_suspend` on any device and, on Kindle, resets the idle timer of the system every 4 minutes, as a touch would, the same way KOReader's own auto suspend does. Both stop on closing. Other plugins that hold the device awake with the same module are counted, so closing Book Drop does not let the device sleep in the middle of their work. The 10 minute limit avoids draining the battery if the screen is left open, and a crash of KOReader leaves nothing behind: nobody resets the timer, and the Kindle sleeps by itself.
+
+`preventScreenSaver` in `powerd` is not used, because it also makes the Kindle ignore the power button. Two limits follow from that: while the e-reader is charging, the timer is not reset (KOReader does not either, since it causes problems on Kindle), so a transfer of more than about 10 minutes without a touch may be cut by sleep; and while the `keepalive` plugin is active, powerd belongs to it and the timer is left alone.
+
+The timers of the screen (the server tick and the zip) go through `book_drop/sleep.lua`, which holds them, and any paint, while the device sleeps.
 
 Sleep still happens when the power button is pressed. Sharing stops then, the screen stays open, and if the KOReader sleep screen is set to the book cover, `assets/screensaver.png` shows instead. `book_drop/screensaver.lua` wraps KOReader's `Screensaver.setup`: KOReader picks the image as usual, and the plugin swaps it only when its screen is the topmost full-screen window. Nothing is saved, so closing the plugin brings back the book cover. Powering off, restarting or any other sleep screen mode are left alone. The image is 1200x1600, twice 600x800, so it stays sharp on larger screens; on 600x800 KOReader halves it.
 
 ## Limits
 
 - There is no `.zip` of books, because building one would freeze the screen for a long time.
-- The screenshots zip has no compression, since PNG is already compressed. The screen may freeze for a moment while it is built. It is kept while the screenshots stay the same, so asking again serves the same file, and it is refused when it would leave less than 50 MB free, since the cache shares its partition with KOReader's settings. A zip smaller than its files counts as a failed write and is not served.
+- The screenshots zip has no compression, since PNG is already compressed. It is never built inside a request: the request schedules it and answers `503` with `Retry-After: 2`, on a page that asks again every two seconds, without a script, and the download starts by itself when the zip is ready. Meanwhile the device shows "Preparing the .zip file", painted before the work starts, since the screen freezes for a moment while it is built. It is kept while the screenshots stay the same, so asking again serves the same file, and it is refused when it would leave less than 50 MB free, since the cache shares its partition with KOReader's settings. A zip smaller than its files counts as a failed write and is not served.
 - Each cover is read while the interface waits, typically for a few milliseconds. A cover or a download checks only its own file; the books folder is walked again only for the Books page, at most every 5 seconds.
 - Networks with client isolation, common on guest Wi-Fi, stop the phone from reaching the device.
 - `Writer:addFileFromMemory` in KOReader writes the `0644` permission as decimal 644, which leaves extracted files unreadable. That is why the plugin uses `addPath`.
@@ -78,8 +82,13 @@ book_drop.koplugin/
     cover.lua             reads covers from EPUBs
     i18n.lua              texts in Portuguese, English and Spanish
     storage.lua           what can be listed in the books folder and how a file gets there
-    server.lua            HTTP server that does not block the interface
-    ui/screen.lua         QR code, state, approval, firewall, sleep and closing
+    ui/screen.lua         QR code, state, approval, the zip, sleep and closing
+    lan.lua               code in the address, Wi-Fi address and firewall (pattern lan_server)
+    http_server.lua       HTTP server that does not block the interface (pattern lan_server)
+    awake.lua             keeps the device awake while sharing (pattern awake)
+    portrait.lua          the screen in portrait (pattern portrait)
+    refresh.lua           updates with or without a flash (pattern eink_refresh)
+    sleep.lua             no timers or paint while the device sleeps (pattern sleep)
     screensaver.lua       the plugin cover on the sleep screen
   assets/screensaver.png  full-screen cover for the sleep screen, 1200x1600
   tests/, tools/, docs/   development
@@ -87,21 +96,30 @@ book_drop.koplugin/
 
 ## Tools
 
-- `luajit tests/access_spec.lua`: tests for the rules, including attack attempts and crafted EPUB metadata.
-- `luajit tests/server_spec.lua`: tests for the server with fake connections: places per address, uploads, downloads and errors.
-- `luajit tests/storage_spec.lua`: tests for the books folder on real temporary folders, with LuaFileSystem: what is listed, links, reading data, hidden items, depth, names taken and leftovers.
-- With `KOREADER_DIR` pointing to a desktop KOReader:
+- `sh tools/check.sh`: everything that runs without KOReader, the same command as the CI. It runs the tests, `tools/check_texts.lua` and `tools/package.sh`:
+  - `luajit tests/access_spec.lua`: tests for the rules, including attack attempts and crafted EPUB metadata.
+  - `luajit tests/server_spec.lua`: tests for the server with fake connections: places per address, deadlines, a head too large, uploads, downloads and errors.
+  - `luajit tests/storage_spec.lua`: tests for the books folder on real temporary folders, with LuaFileSystem: what is listed, links, reading data, hidden items, depth, names taken and leftovers. On a Mac: `luarocks --lua-version 5.1 install luafilesystem`, and `eval "$(luarocks --lua-version 5.1 path)"` in the shell profile, since LuaRocks installs in `~/.luarocks`, where LuaJIT does not look by default.
+  - `luajit tools/check_texts.lua s strings`: the same keys and markers in the three languages, no dash, no brand of e-reader, and every key the code asks for.
+  - `sh tools/package.sh` builds the release package in `dist/`.
+- With `KOREADER_DIR` pointing to a desktop KOReader, before each release:
   - `tools/koreader/check_server.sh` starts the real server and tests it with `curl`: approval, integrity of downloads and uploads, covers, the zip, cut and simultaneous uploads, and attack attempts.
+  - `tools/koreader/check_all_sizes.sh` runs `tools/koreader/check_layout.lua` in four screen sizes: every state of the screen, in every language and with the longest texts, fits the height. With `OUTPUT_DIR`, it saves the screens.
+  - `tools/koreader/run_headless.sh tools/koreader/fuzz_ui.lua`: random touches on every state of the screen and on the approval question, in every language.
+  - `tools/koreader/run_headless.sh tools/koreader/check_rotation.lua`: the screen opens in portrait with KOReader in landscape and gives the rotation back on closing (cases in `rotation_cases.lua`).
+  - `tools/koreader/run_headless.sh tools/koreader/check_sleep.lua`: nothing is painted or shown while the device sleeps, with a real session running (cases in `sleep_cases.lua`).
+  - `tools/koreader/run_headless.sh tools/koreader/check_lan.lua` and `check_awake.lua`: the firewall and the awake mode, pretending to be a Kindle.
+  - `tools/koreader/run_headless.sh tools/koreader/check_screensaver.lua` checks when the plugin cover replaces the sleep screen image. With `OUTPUT_DIR`, it saves the resulting screen there.
   - `tools/koreader/run_emulator.sh` opens a window with the plugin.
   - `tools/koreader/render_readme_screens.sh` renders the device screens for the README. With `SERVE=600`, it also keeps a demo library online for 10 minutes, to capture the pages in a browser.
-  - `tools/koreader/run_headless.sh tools/koreader/check_screensaver.lua` checks when the plugin cover replaces the sleep screen image. With `OUTPUT_DIR`, it saves the resulting screen there.
-  - `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview. With `screensaver` as argument it draws `assets/screensaver.png` instead, in the same style.
-- `tools/package.sh` builds the release package.
+- `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview. With `screensaver` as argument it draws `assets/screensaver.png` instead, in the same style.
 
-The firewall and `preventScreenSaver` exist only on Kindle and are not exercised by these tests.
+The files `lan.lua`, `http_server.lua`, `awake.lua`, `portrait.lua`, `refresh.lua`, `sleep.lua`, `screensaver.lua`, the `run_*.sh`, `check_*.sh` and `check_*.lua` scripts that come from a pattern, `tools/package_lib.sh`, `tools/koreader/fuzz.lua` and the two workflows are shared with other plugins and start with a `Pattern` line: they are changed where the pattern lives, not here.
+
+The firewall and the idle timer exist only on Kindle. `check_lan.lua` and `check_awake.lua` pretend to be one; on the device, check by SSH with the screen open and then closed: `iptables -S INPUT | grep 8642` shows three rules and then none, and `cat /mnt/us/koreader/settings/book_drop.firewall` shows the port and then does not exist. Then, off the charger, leave the screen open for 12 minutes without a touch (the e-reader stays awake) and press the power button with the screen open (the e-reader sleeps).
 
 ## Releasing
 
 1. Update the version in `_meta.lua` and the section in `CHANGELOG.md`.
-2. Run the tests above.
-3. Create a GitHub release with the tag `v<version>`. The workflow checks that the tag matches `_meta.lua`, runs the tests, builds the package and attaches it.
+2. Run `sh tools/check.sh` and the checks in the desktop KOReader above.
+3. Create a GitHub release with the tag `v<version>`. The workflow checks that the tag matches `_meta.lua`, runs `tools/check.sh release`, builds the package and attaches every zip in `dist/` with its checksum.
