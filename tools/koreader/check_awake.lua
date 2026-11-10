@@ -31,6 +31,10 @@ end
 local marker_dir = DataStorage:getSettingsDir() .. "/"
 lfs.mkdir(marker_dir)
 local marker = marker_dir .. id .. ".awake"
+-- Where the oldest versions of the module kept it.
+local cache_dir = DataStorage:getDataDir() .. "/cache/"
+lfs.mkdir(cache_dir)
+local cache_marker = cache_dir .. id .. ".awake"
 
 local commands = {}
 os.execute = function(command)
@@ -85,14 +89,27 @@ local function count(text)
     return n
 end
 
-local leftover = io.open(marker, "w")
-leftover:close()
+for _, path in ipairs({ marker, cache_marker }) do
+    local leftover = io.open(path, "w")
+    leftover:close()
+end
 local Awake = require(id .. "/awake")
 Awake.install(id)
-check("a marker of an earlier version: install turns preventScreenSaver off", count("preventScreenSaver 0") == 1)
+check("markers of earlier versions: install turns preventScreenSaver off once", count("preventScreenSaver 0") == 1)
 check("a marker of an earlier version: install removes it", not exists(marker))
+check("a marker of the oldest versions, in cache: install removes it", not exists(cache_marker))
 Awake.install(id)
 check("install recovers only once", count("preventScreenSaver 0") == 1)
+
+-- A fresh copy of the module, as in the next run of KOReader, with only the marker in cache.
+local leftover = io.open(cache_marker, "w")
+leftover:close()
+commands = {}
+local Fresh = dofile(plugin_dir .. "/" .. id .. "/awake.lua")
+Fresh.install(id)
+check("only the marker in cache: install turns preventScreenSaver off", count("preventScreenSaver 0") == 1)
+check("only the marker in cache: install removes it", not exists(cache_marker))
+commands = {}
 
 PluginShare.pause_auto_suspend = "previous"
 Awake.set(true)

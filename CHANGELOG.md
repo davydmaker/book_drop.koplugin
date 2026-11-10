@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.1]
+
+- The module that keeps the e-reader awake, shared with other plugins, now also clears the marker its oldest versions kept in KOReader's cache folder after a crash. Book Drop never used that place, so nothing changes in use.
+
 ## [1.1.0]
 
 - Texts on the screen and on the pages say "e-reader" instead of "Kindle", since the plugin runs on other e-readers too. The screenshots `.zip` is now called `screenshots.zip`.

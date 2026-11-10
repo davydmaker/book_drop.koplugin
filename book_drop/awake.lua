@@ -57,9 +57,13 @@ local function stop_timer()
     end
 end
 
--- An earlier version of this module turned preventScreenSaver on, with this marker while it was on.
-local function legacy_marker_path()
-    return DataStorage:getSettingsDir() .. "/" .. Awake.id .. ".awake"
+-- Earlier versions of this module turned preventScreenSaver on, with a marker while it was on: in the settings
+-- folder, or in cache/ in the oldest ones.
+local function legacy_marker_paths()
+    return {
+        DataStorage:getSettingsDir() .. "/" .. Awake.id .. ".awake",
+        DataStorage:getDataDir() .. "/cache/" .. Awake.id .. ".awake",
+    }
 end
 
 -- id: the plugin identifier. Call it when main.lua loads. It also undoes what an earlier version of this
@@ -71,11 +75,15 @@ function Awake.install(id)
         return
     end
     Awake.recovered = true
-    if lfs.attributes(legacy_marker_path(), "mode") == "file" then
-        if Device:isKindle() and not PluginShare.keepalive then
-            os.execute("lipc-set-prop com.lab126.powerd preventScreenSaver 0")
+    local found = false
+    for _, path in ipairs(legacy_marker_paths()) do
+        if lfs.attributes(path, "mode") == "file" then
+            found = true
+            os.remove(path)
         end
-        os.remove(legacy_marker_path())
+    end
+    if found and Device:isKindle() and not PluginShare.keepalive then
+        os.execute("lipc-set-prop com.lab126.powerd preventScreenSaver 0")
     end
 end
 
