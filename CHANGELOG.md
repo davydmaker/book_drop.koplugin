@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.2]
+
+- After a full refresh, the next update waits for it to end, so a tap right after a flash no longer leaves part of the screen white on a Kindle. The refresh mode is now chosen when the screen is painted, so the wait happens at the right moment and an update asked for during sleep no longer counts.
+- If the screen cannot be drawn (it shows names and addresses that come from another device), a message takes its place, with the Close button, and the transfer stops, instead of a screen that cannot be used.
+
 ## [1.1.1]
 
 - The module that keeps the e-reader awake, shared with other plugins, now also clears the marker its oldest versions kept in KOReader's cache folder after a crash. Book Drop never used that place, so nothing changes in use.

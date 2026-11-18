@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/banner.png" alt="Book Drop: envie livros para o seu leitor por qualquer navegador">
+  <img src="docs/brand/banner_pt.png" alt="Book Drop: envie livros ao seu leitor por qualquer navegador">
 </p>
 
 <p align="center">

@@ -36,7 +36,7 @@ None of these layers makes the connection fully secure: there is no HTTPS, so so
 | Limits | Headers up to 8 KB, one upload at a time, and 30 seconds without progress end a connection. The device in use (approved, or waiting for approval) has 6 connections of its own; the other addresses share 6 more, at most 2 each, so they can never take its places. A blocked address is dropped as soon as it connects. |
 | Strikes per address | 20 invalid requests block that address only, so someone else on the network cannot end the session. The approved device is never blocked. |
 | Pages | Escaped names, a restrictive `Content-Security-Policy`, `nosniff`, and no cache except for covers. The only script is the upload one, served by the plugin, and the other pages work without it. |
-| Errors stay contained | An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. The error goes to KOReader's log, without the request, which carries the code. |
+| Errors stay contained | An error drawing the screen, which shows names and addresses from another device, gives way to a message without them, with the Close button, and stops the session. An error while handling a request ends that connection only, so it cannot reach KOReader's interface loop. The error goes to KOReader's log, without the request, which carries the code. |
 | After a crash | If KOReader crashes or quits with the screen open, the next start of KOReader closes the port (from `book_drop.firewall`), lets the device sleep again (from `book_drop.awake`, both in KOReader's settings folder) and removes temporary files (from `cache/book_drop.active`). A failure while opening the screen also stops the server, closes the port and lets the device sleep again. |
 
 ### Covers
@@ -104,7 +104,7 @@ book_drop.koplugin/
   - `sh tools/package.sh` builds the release package in `dist/`.
 - With `KOREADER_DIR` pointing to a desktop KOReader, before each release:
   - `tools/koreader/check_server.sh` starts the real server and tests it with `curl`: approval, integrity of downloads and uploads, covers, the zip, cut and simultaneous uploads, and attack attempts.
-  - `tools/koreader/check_all_sizes.sh` runs `tools/koreader/check_layout.lua` in four screen sizes: every state of the screen, in every language and with the longest texts, fits the height. With `OUTPUT_DIR`, it saves the screens.
+  - `tools/koreader/check_all_sizes.sh` runs `tools/koreader/check_layout.lua` in four screen sizes: every state of the screen, in every language and with the longest texts, fits the height; the refresh modes come in the expected order (a flash for each new layout and after eight updates without one); and an error planted while drawing a book name gives way to the message. With `OUTPUT_DIR`, it saves the screens.
   - `tools/koreader/run_headless.sh tools/koreader/fuzz_ui.lua`: random touches on every state of the screen and on the approval question, in every language.
   - `tools/koreader/run_headless.sh tools/koreader/check_rotation.lua`: the screen opens in portrait with KOReader in landscape and gives the rotation back on closing (cases in `rotation_cases.lua`).
   - `tools/koreader/run_headless.sh tools/koreader/check_sleep.lua`: nothing is painted or shown while the device sleeps, with a real session running (cases in `sleep_cases.lua`).
@@ -112,7 +112,7 @@ book_drop.koplugin/
   - `tools/koreader/run_headless.sh tools/koreader/check_screensaver.lua` checks when the plugin cover replaces the sleep screen image. With `OUTPUT_DIR`, it saves the resulting screen there.
   - `tools/koreader/run_emulator.sh` opens a window with the plugin.
   - `tools/koreader/render_readme_screens.sh` renders the device screens for the README. With `SERVE=600`, it also keeps a demo library online for 10 minutes, to capture the pages in a browser.
-- `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview. With `screensaver` as argument it draws `assets/screensaver.png` instead, in the same style.
+- `python3 -I tools/make_brand_art.py` draws the icon, the banner and the social preview, in English and in Portuguese (`docs/brand/banner_pt.png` for `README_pt.md` and `docs/social-preview_pt.png` for posts in Portuguese), with the device screens of each language. With `screensaver` as argument it draws `assets/screensaver.png` instead, in the same style.
 
 The files `lan.lua`, `http_server.lua`, `awake.lua`, `portrait.lua`, `refresh.lua`, `sleep.lua`, `screensaver.lua`, the `run_*.sh`, `check_*.sh` and `check_*.lua` scripts that come from a pattern, `tools/package_lib.sh`, `tools/koreader/fuzz.lua` and the two workflows are shared with other plugins and start with a `Pattern` line: they are changed where the pattern lives, not here.
 

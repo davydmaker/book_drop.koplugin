@@ -433,10 +433,36 @@ function Screen:set_group(kind, group)
         height = self.height,
         CenterContainer:new{ dimen = Geom:new{ w = self.width, h = self.height }, group },
     }
-    local mode = self.refresh:mode(kind)
+    -- Read when KOReader paints, where Refresh waits for a flash still running; a paint skipped during sleep
+    -- does not count.
     Sleep.dirty(self, function()
-        return mode, self.dimen
+        return self.refresh:mode(kind), self.dimen
     end)
+end
+
+-- The screen shows names and addresses that come from another device. An error drawing them would repeat on
+-- every paint and hide even the Stop button, so the screen gives way to a message without them, and the
+-- session ends, since its state can no longer be seen.
+function Screen:paintTo(bb, x, y)
+    local ok, err = pcall(InputContainer.paintTo, self, bb, x, y)
+    if ok then
+        return
+    end
+    logger.warn("Book Drop: could not draw the screen", err)
+    if self.state == "message" and self.paint_failed then
+        error(err, 0)
+    end
+    self.paint_failed = true
+    -- KOReader is going through its windows to paint them, so the approval question, painted after this screen,
+    -- is closed only once the paint is over. Its buttons do nothing once the session is gone.
+    local confirm = self.confirm
+    self.confirm = nil
+    self:stop_sharing()
+    if confirm then
+        UIManager:nextTick(function() UIManager:close(confirm) end)
+    end
+    self:show_message(self.strings.ended_title, self.strings.draw_failed)
+    InputContainer.paintTo(self, bb, x, y)
 end
 
 function Screen:show_message(title, message)
